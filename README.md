@@ -5,8 +5,9 @@
 MoonBit 生态里 ECS、物理、寻路、渲染、行为树都已经有人做，但"把两个玩家连起来还不漂移"这一层是空白。
 `moonroll` 补的就是这一层：不绑定任何引擎的确定性回滚同步（rollback netcode）。
 
-**状态：V0.3（字节协议与网络模拟）**。定点数、状态哈希、输入环、预测 / 确认 / 回滚重放、
-紧凑字节协议、确定性延迟 / 抖动 / 丢包 / 乱序模拟器已可用。
+**状态：V0.4（接入 moonphys + 可视化）**。定点数、状态哈希、输入环、预测 / 确认 / 回滚重放、
+紧凑字节协议、确定性延迟 / 抖动 / 丢包 / 乱序模拟器，以及一个把两个 `moonphys` 物理世界
+连起来的可运行演示。
 
 ---
 
@@ -114,6 +115,42 @@ net.in_flight()  // 在途包数
 时间单位是逻辑帧（60fps 下 1 帧 ≈ 16.7ms），内部是确定性 LCG：
 **同 seed、同发送序列必然得到同到达序列**，所以整条链路可以进单元测试和 fuzz。
 
+## 演示：两个物理世界互相同步
+
+`adapters/phys` 把 `moonphys` 的 `World` 包成 `Sim`：`save` / `restore` 走
+`World::save_state` / `World::load_state`（含位姿、速度、暖启动冲量与世界时钟），
+`hash` 走 `state_hash`。`demo/` 里跑一局真实对局：两个独立物理世界、两个 `Session`、
+两条带延迟 / 抖动 / 丢包 / 乱序的模拟链路，每帧互发最近 8 帧输入。
+
+```bash
+# 构建 wasm 产物到 docs/engine.wasm（产物已提交，改代码后重跑）
+pwsh tools/build-demo.ps1
+
+# 无头验收：1800 帧脚本对局，200ms 延迟 + 50ms 抖动
+node tools/check-demo.mjs
+# 自检 frames=1860 confirmed=1846/1846 rollbacks=1846/1846 desync=0 bodies=3
+
+# 本地预览页面（wasm 不能走 file://）
+python -m http.server --directory docs 8123
+```
+
+页面在 `docs/index.html` + `docs/app.js`，零外部依赖，导出全是数值 ABI：
+
+| 导出 | 作用 |
+| --- | --- |
+| `mr_reset(delay, jitter, loss, reorder)` | 重建一局，参数单位是帧 / 百分比 |
+| `mr_step(i0, i1)` | 推进一帧，`i0` / `i1` 是双方输入位图 |
+| `mr_confirmed` / `mr_rollbacks` / `mr_desync` | 确认帧、回滚次数、分叉次数 |
+| `mr_synced` / `mr_hash_lo` / `mr_hash_hi` | 两端状态哈希是否一致 |
+| `mr_body_*` | 刚体位姿，供 canvas 直接画 |
+| `mr_selftest()` | 跑完整 1800 帧验收，0 表示通过 |
+
+页面上左侧是 P0 的本地世界、右侧是 P1 的本地世界，同色虚线框是对端眼中同一物体的位置：
+延迟拉大时能看到虚线与实体暂时错开，回滚重放后重新贴合，`desync` 始终为 0。
+
+分叉判定只比**已确认帧**的历史哈希（`Session::hash_at`）。直接比当前帧会把两端各自不同的
+预测误判成分叉——预测本来就可以合法地不同，只有双方输入都到齐的帧才必须逐位一致。
+
 ## 性能
 
 `moon bench -p weopqrst/moonroll/session`（wasm-gc，Windows x64）：
@@ -133,9 +170,11 @@ net.in_flight()  // 在途包数
 | `weopqrst/moonroll/fixed` | Q16.16 定点数（`+ - * /`、开方、lerp、clamp） | V0.1 |
 | `weopqrst/moonroll/digest` | FNV-1a 64 状态哈希 | V0.1 |
 | `weopqrst/moonroll/input` | 帧号 -> 输入位图的环形缓冲 | V0.1 |
-| `weopqrst/moonroll/session` | `Sim` 协议 + 预测 / 确认 / 回滚重放 | V0.2 |
+| `weopqrst/moonroll/session` | `Sim` 协议 + 预测 / 确认 / 回滚重放 / 历史哈希 | V0.2 |
 | `weopqrst/moonroll/protocol` | 输入帧、确认帧、校验和帧的字节编解码 | V0.3 |
 | `weopqrst/moonroll/sim_net` | 延迟 / 抖动 / 丢包 / 乱序模拟器 | V0.3 |
+| `weopqrst/moonroll/adapters/phys` | `moonphys` 参考适配层（`PhysSim`） | V0.4 |
+| `weopqrst/moonroll/demo` | wasm-gc 演示引擎（`mr_*` 数值导出） | V0.4 |
 
 ## 验证
 
@@ -145,7 +184,7 @@ moon test --target js
 moon run cmd/main --target wasm-gc
 ```
 
-43 个测试，两个后端全绿。核心断言：
+117 个测试，两个后端全绿。核心断言：
 
 - 定点数与 `Double` 对拍误差不超过 4 个 LSB；
 - FNV-1a 64 对 `"hello"` 命中标准向量 `0xa430d84680aabd0b`；
@@ -157,14 +196,18 @@ moon run cmd/main --target wasm-gc
 - 协议 round-trip：1000 组随机输入帧 + 500 组确认 / 校验和帧逐位还原；
   所有前缀截断与随机垃圾字节只返回 `None`，不 panic；
 - 模拟器同种子可复现（同发送序列 → 同到达序列），抖动确实产生逆序交付；
-- 输入环 / 快照环回绕后只保留窗口内帧，旧帧不会误命中。
+- 输入环 / 快照环回绕后只保留窗口内帧，旧帧不会误命中；
+- **两个 `moonphys` 物理世界 240 帧逐位相同；120 帧快照恢复后重放至 300 帧，hash 仍与不中断运行一致；**
+- **200ms 延迟 + 50ms 抖动下 600 帧真实对局：`desync=0`，两端在已确认帧上哈希逐步一致；**
+- **15% 丢包下回滚次数大于零，但两端仍是 `desync=0`（重发把丢掉的输入补齐）；**
+- **`hash_at` 在回滚重放后返回重放结果，超出快照窗口后返回 `None`。**
 
 ## Roadmap
 
 - **V0.1** 基础层：定点数、状态哈希、输入环（已完成）
 - **V0.2** 回滚会话：预测、确认、快照/恢复、重放（已完成）
-- **V0.3** 字节协议 + 延迟/抖动/丢包/乱序模拟 + fuzz（当前）
-- **V0.4** 接入 `moonphys` 的 wasm-gc 可视化演示（帧时间线、回滚计数、延迟滑块）
+- **V0.3** 字节协议 + 延迟/抖动/丢包/乱序模拟 + fuzz（已完成）
+- **V0.4** 接入 `moonphys` 的 wasm-gc 可视化演示（双世界对照、回滚计数、延迟滑块）（当前）
 - **V1.0** CI 三后端一致性、文档、mooncakes 发布
 
 ## 明确不做

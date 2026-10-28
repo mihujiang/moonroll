@@ -1,0 +1,8 @@
+import {
+  "weopqrst/moonroll/adapters/phys",
+  "weopqrst/moonroll/protocol",
+  "weopqrst/moonroll/session",
+  "weopqrst/moonroll/sim_net",
+}
+
+pkgtype(kind: "foreign_library")

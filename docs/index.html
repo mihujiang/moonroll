@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>moonroll · 确定性回滚网络演示</title>
+    <style>
+      :root {
+        --bg: #070b14; --panel: rgba(17, 24, 39, 0.72); --line: rgba(148, 163, 184, 0.16);
+        --text: #e2e8f0; --dim: #7f8ea8; --p0: #38bdf8; --p1: #f472b6;
+        --ok: #34d399; --bad: #fb7185;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0; min-height: 100%; color: var(--text);
+        background: radial-gradient(1100px 620px at 18% -12%, #12203a 0%, transparent 58%),
+                    radial-gradient(900px 560px at 88% 4%, #1b1130 0%, transparent 55%), var(--bg);
+        font: 13px/1.55 "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      .wrap { max-width: 1180px; margin: 0 auto; padding: 20px 20px 28px; display: flex;
+              flex-direction: column; gap: 14px; min-height: 100vh; }
+      header { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+      h1 { margin: 0; font-size: 17px; font-weight: 650; }
+      h1 em { font-style: normal; background: linear-gradient(120deg, var(--p0), var(--p1));
+              -webkit-background-clip: text; background-clip: text; color: transparent; }
+      header p { margin: 0; color: var(--dim); font-size: 12px; }
+      .badge { margin-left: auto; display: inline-flex; align-items: center; gap: 7px;
+               padding: 6px 13px; border-radius: 999px; font-size: 12px; font-weight: 600;
+               border: 1px solid var(--line); background: rgba(148, 163, 184, 0.08);
+               color: var(--dim); transition: all 0.25s ease; }
+      .badge i { width: 8px; height: 8px; border-radius: 50%; background: currentColor;
+                 box-shadow: 0 0 10px currentColor; }
+      .badge.synced { color: var(--ok); border-color: rgba(52, 211, 153, 0.4); background: rgba(52, 211, 153, 0.1); }
+      .badge.desync { color: var(--bad); border-color: rgba(251, 113, 133, 0.45); background: rgba(251, 113, 133, 0.12); }
+      main { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 14px; min-height: 340px; }
+      .world { position: relative; display: flex; flex-direction: column; overflow: hidden;
+               background: var(--panel); border: 1px solid var(--line); border-radius: 16px;
+               backdrop-filter: blur(10px); box-shadow: 0 18px 48px rgba(0, 0, 0, 0.38); }
+      .world::before { content: ""; position: absolute; inset: 0 0 auto 0; height: 2px;
+                       background: linear-gradient(90deg, transparent, var(--accent), transparent); }
+      .world.p0 { --accent: var(--p0); }
+      .world.p1 { --accent: var(--p1); }
+      .world-head { display: flex; align-items: baseline; gap: 10px; padding: 11px 14px 8px;
+                    font-size: 12px; color: var(--dim); }
+      .world-head strong { color: var(--accent); letter-spacing: 0.05em; }
+      .world-head span { margin-left: auto; font-variant-numeric: tabular-nums; }
+      canvas { display: block; width: 100%; flex: 1; min-height: 250px; }
+      .world-foot { display: flex; gap: 14px; padding: 8px 14px 11px; flex-wrap: wrap;
+                    border-top: 1px solid var(--line); font-size: 11.5px; color: var(--dim);
+                    font-variant-numeric: tabular-nums; }
+      .world-foot b { color: var(--text); font-weight: 550; }
+      .swatch { width: 9px; height: 9px; border-radius: 3px; display: inline-block;
+                margin-right: 4px; vertical-align: -1px; }
+      .controls { display: flex; flex-direction: column; gap: 12px; padding: 13px 15px;
+                  background: var(--panel); border: 1px solid var(--line); border-radius: 16px;
+                  backdrop-filter: blur(10px); box-shadow: 0 18px 48px rgba(0, 0, 0, 0.38); }
+      .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+      button { border: 1px solid var(--line); background: rgba(148, 163, 184, 0.1); color: var(--text);
+               border-radius: 10px; padding: 7px 14px; font: inherit; font-size: 12.5px;
+               cursor: pointer; min-width: 64px; transition: background 0.15s ease, transform 0.1s ease; }
+      button:hover { background: rgba(148, 163, 184, 0.2); }
+      button:active { transform: translateY(1px); }
+      button.primary { background: linear-gradient(135deg, #0ea5e9, #6366f1);
+                       border-color: transparent; color: #04121f; font-weight: 650; }
+      button.primary:hover { filter: brightness(1.1); }
+      button.ghost { background: transparent; }
+      button:disabled { opacity: 0.45; cursor: default; }
+      .sliders { display: grid; grid-template-columns: repeat(auto-fit, minmax(196px, 1fr)); gap: 9px 18px; }
+      .slider { display: grid; grid-template-columns: 52px 1fr 74px; align-items: center; gap: 9px;
+                font-size: 12px; color: var(--dim); }
+      .slider output { color: var(--text); text-align: right; font-size: 11.5px;
+                       font-variant-numeric: tabular-nums; }
+      input[type="range"] { width: 100%; accent-color: #0ea5e9; height: 4px; }
+      .hud { display: flex; gap: 18px; flex-wrap: wrap; margin-left: auto; font-size: 11.5px;
+             color: var(--dim); font-variant-numeric: tabular-nums; }
+      .hud b { color: var(--text); font-weight: 550; }
+      .note { display: flex; gap: 14px; flex-wrap: wrap; color: var(--dim); font-size: 11.5px; }
+      kbd { font: inherit; font-size: 11px; padding: 1px 5px; border: 1px solid var(--line);
+            border-bottom-width: 2px; border-radius: 5px;
+            background: rgba(148, 163, 184, 0.1); color: var(--text); }
+      .self-test { margin-left: auto; font-size: 11.5px; color: var(--dim);
+                   font-variant-numeric: tabular-nums; }
+      .self-test b.pass { color: var(--ok); }
+      .self-test b.fail { color: var(--bad); }
+      .overlay { position: fixed; inset: 0; display: none; place-items: center; z-index: 20;
+                 background: rgba(7, 11, 20, 0.84); backdrop-filter: blur(3px);
+                 color: var(--dim); font-size: 13px; text-align: center; padding: 24px;
+                 white-space: pre-line; }
+      .overlay.show { display: grid; }
+      .overlay.error { color: var(--bad); }
+      @media (max-width: 860px) {
+        main { grid-template-columns: 1fr; }
+        .hud, .badge, .self-test { margin-left: 0; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <h1><em>moonroll</em> · 确定性回滚网络</h1>
+        <p>纯 MoonBit · 两个物理世界在本机互发输入、预测、回滚、重放</p>
+        <span class="badge" id="badge"><i></i><span id="badgeText">启动中</span></span>
+      </header>
+
+      <main>
+        <section class="world p0">
+          <div class="world-head">
+            <strong>P0</strong><span class="swatch" style="background: var(--p0)"></span>本地世界
+            <span>frame <b id="p0frame">0</b></span>
+          </div>
+          <canvas id="canvas0"></canvas>
+          <div class="world-foot">
+            <span>确认到 <b id="p0confirmed">0</b></span>
+            <span>回滚 <b id="p0rollbacks">0</b></span>
+            <span>hash <b id="p0hash">–</b></span>
+          </div>
+        </section>
+
+        <section class="world p1">
+          <div class="world-head">
+            <strong>P1</strong><span class="swatch" style="background: var(--p1)"></span>本地世界
+            <span>frame <b id="p1frame">0</b></span>
+          </div>
+          <canvas id="canvas1"></canvas>
+          <div class="world-foot">
+            <span>确认到 <b id="p1confirmed">0</b></span>
+            <span>回滚 <b id="p1rollbacks">0</b></span>
+            <span>hash <b id="p1hash">–</b></span>
+          </div>
+        </section>
+      </main>
+
+      <div class="controls">
+        <div class="row">
+          <button class="primary" id="pause">暂停</button>
+          <button id="stepBtn">单步</button>
+          <button class="ghost" id="resetBtn">重置</button>
+          <button class="ghost" id="selftestBtn">运行自检</button>
+          <span class="self-test" id="selftestOut">自检：1800 帧脚本对局</span>
+          <div class="hud">
+            <span>帧 <b id="hudFrame">0</b></span>
+            <span>在途 <b id="hudInFlight">0</b></span>
+            <span>丢弃 <b id="hudDropped">0</b></span>
+            <span>分叉 <b id="hudDesync">0</b></span>
+            <span>FPS <b id="hudFps">–</b></span>
+          </div>
+        </div>
+
+        <div class="sliders">
+          <label class="slider">延迟 <input type="range" id="delay" min="0" max="30" step="1" value="12" /><output id="delayOut"></output></label>
+          <label class="slider">抖动 <input type="range" id="jitter" min="0" max="12" step="1" value="3" /><output id="jitterOut"></output></label>
+          <label class="slider">丢包 <input type="range" id="loss" min="0" max="30" step="1" value="0" /><output id="lossOut"></output></label>
+          <label class="slider">乱序 <input type="range" id="reorder" min="0" max="30" step="1" value="10" /><output id="reorderOut"></output></label>
+        </div>
+
+        <div class="note">
+          <span><b style="color: var(--p0)">P0</b> <kbd>A</kbd><kbd>D</kbd> 移动 <kbd>W</kbd> 跳</span>
+          <span><b style="color: var(--p1)">P1</b> <kbd>←</kbd><kbd>→</kbd> 移动 <kbd>↑</kbd> 跳</span>
+          <span><kbd>空格</kbd> 暂停 <kbd>R</kbd> 重置</span>
+          <span>同色虚线框 = 对端同一物体的位置，贴合即同步</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="overlay" id="overlay">加载 engine.wasm…</div>
+    <script src="./app.js"></script>
+  </body>
+</html>
