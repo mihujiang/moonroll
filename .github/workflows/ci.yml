@@ -46,6 +46,7 @@ jobs:
           moon run examples/four_peer
           moon run examples/drop_out
           moon run examples/bandwidth
+          moon run examples/resync
 
   demo:
     runs-on: ubuntu-latest

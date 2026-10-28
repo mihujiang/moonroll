@@ -213,6 +213,9 @@ fn deliver(
           }
         }
       @protocol.Active(_) => ()
+      // 带宽示例不做重同步：收到状态帧只当没看见
+      @protocol.Snap(_) => ()
+      @protocol.SnapRequest(_) => ()
     }
   }
   bad

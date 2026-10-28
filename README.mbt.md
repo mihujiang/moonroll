@@ -5,10 +5,10 @@
 MoonBit 生态里 ECS、物理、寻路、渲染、行为树都已经有人做，但"把两个玩家连起来还不漂移"这一层是空白。
 `moonroll` 补的就是这一层：不绑定任何引擎的确定性回滚同步（rollback netcode）。
 
-**状态：V0.8（带宽）**。定点数、状态哈希、输入环、预测 / 确认 / 回滚重放、
-紧凑字节协议（区间帧 + 变化掩码）、确定性延迟 / 抖动 / 丢包 / 乱序模拟器，
-一个把两个 `moonphys` 物理世界连起来的可视化演示，以及六个 `moon run` 就能跑的示例
-（含四人对局重放成本对比、掉线走势对比、五种发包策略的带宽对比）。
+**状态：V0.9（分叉恢复）**。定点数、状态哈希、输入环、预测 / 确认 / 回滚重放、
+紧凑字节协议（区间帧 + 变化掩码 + 全量状态帧）、确定性延迟 / 抖动 / 丢包 / 乱序模拟器，
+一个把两个 `moonphys` 物理世界连起来的可视化演示，以及七个 `moon run` 就能跑的示例
+（含四人对局重放成本对比、掉线走势对比、五种发包策略的带宽对比、分叉后的全量重同步）。
 
 设计取舍见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
 
@@ -95,6 +95,8 @@ ring.set(frame, 0b101UL)
 | Input | `[0x01][varint player][varint frame][varint count][varint bits] × count` |
 | Confirm | `[0x02][varint frame]` |
 | Checksum | `[0x03][varint frame][8 bytes hash]` |
+| Snap | `[0x06][varint frame][varint len][len bytes 状态]` |
+| SnapAsk | `[0x07][varint frame]` |
 
 ```moonbit nocheck
 let wire = @protocol.encode(@protocol.Message::Input(
@@ -109,6 +111,24 @@ for m in @protocol.decode_batch(batch) { /* ... */ }
 
 `encode` 不做数量校验（`count` 由调用方决定），`decode` 对截断、未知标签、垃圾字节、
 超过 8 个玩家的帧一律返回 `None`，不会 panic。这是「网络输入不可信」的底线。
+
+`Snap` 是某一帧的完整状态（`Sim::save` 的原始字节，上限 64 KiB），`SnapAsk` 是「把那一帧
+的状态给我」。分叉之后落后端先 `SnapAsk`，权威端回 `Snap`，落后端再 `resync_from` 整段替换：
+
+```moonbit nocheck
+if peer.hash_at(frame) != remote_hash {
+  // 这一帧就是恢复点：它不早于事故帧，之后的输入两端已经一致
+  @protocol.SnapRequest(@protocol.SnapRequestFrame::new(frame))
+}
+if let Some(state) = peer.export_state(frame) {
+  @protocol.Snap(@protocol.SnapFrame::new(frame, state))
+}
+peer.resync_from(frame, state)   // 越界 / 超出快照窗口返回 false
+peer.resyncs()                   // 正常情况下恒为 0
+```
+
+恢复点必须在快照窗口内（更早的输入已被输入环淘汰，重放会用猜出来的值）；恢复后确认帧
+只前进不回退，本地输入环与帧号不动。重同步修的是未来，恢复点之前的旧哈希不会被改写。
 
 ## 网络模拟器
 
@@ -126,7 +146,7 @@ net.in_flight()  // 在途包数
 时间单位是逻辑帧（60fps 下 1 帧 ≈ 16.7ms），内部是确定性 LCG：
 **同 seed、同发送序列必然得到同到达序列**，所以整条链路可以进单元测试和 fuzz。
 
-## 六个 `moon run` 就能跑的示例
+## 七个 `moon run` 就能跑的示例
 
 ```bash
 moon run examples/two_peer        # 最小闭环：两个 Session + 字节协议 + 3 帧延迟
@@ -135,6 +155,7 @@ moon run examples/desync_demo     # 分叉检测自证：注入输入不一致�
 moon run examples/four_peer       # 四人对局：12 条链路全互联 + 2/4 人成本对比
 moon run examples/drop_out        # 掉线：宣布 / 不宣布掉线的确认帧走势对比
 moon run examples/bandwidth       # 带宽：五种发包策略的字节数对比
+moon run examples/resync          # 分叉恢复：用一份完整状态把落后者掰回来
 ```
 
 `latency_chart` 的真实输出（300 帧，60fps，全部 `desync=0`）：
@@ -191,8 +212,8 @@ python -m http.server --directory docs 8123   # 打开 http://localhost:8123/
 | `weopqrst/moonroll/fixed` | Q16.16 定点数（`+ - * /`、开方、lerp、clamp） | V0.1 |
 | `weopqrst/moonroll/digest` | FNV-1a 64 状态哈希 | V0.1 |
 | `weopqrst/moonroll/input` | 帧号 -> 输入位图的环形缓冲 | V0.1 |
-| `weopqrst/moonroll/session` | `Sim` 协议 + 预测 / 确认 / 回滚重放 / 历史哈希 + 1..8 人会话 | V0.2 |
-| `weopqrst/moonroll/protocol` | 输入帧、确认帧、校验和帧的字节编解码 | V0.3 |
+| `weopqrst/moonroll/session` | `Sim` 协议 + 预测 / 确认 / 回滚重放 / 历史哈希 + 1..8 人会话 + 分叉重同步 | V0.2 |
+| `weopqrst/moonroll/protocol` | 输入帧、确认帧、校验和帧、全量状态帧的字节编解码 | V0.3 |
 | `weopqrst/moonroll/sim_net` | 延迟 / 抖动 / 丢包 / 乱序模拟器 | V0.3 |
 | `weopqrst/moonroll/adapters/phys` | `moonphys` 参考适配层（`PhysSim`） | V0.4 |
 | `weopqrst/moonroll/demo` | wasm-gc 演示引擎（`mr_*` 数值导出） | V0.4 |
@@ -203,6 +224,7 @@ python -m http.server --directory docs 8123   # 打开 http://localhost:8123/
 | `weopqrst/moonroll/examples/four_peer` | 四人对局 + 2/4 人重放成本对比 | V0.6 |
 | `weopqrst/moonroll/examples/drop_out` | 掉线前后确认帧走势对比 | V0.7 |
 | `weopqrst/moonroll/examples/bandwidth` | 五种发包策略的字节数对比 | V0.8 |
+| `weopqrst/moonroll/examples/resync` | 分叉后的全量重同步 | V0.9 |
 
 ## 验证
 
@@ -212,7 +234,7 @@ moon test --target js
 moon run cmd/main --target wasm-gc
 ```
 
-153 个测试，两个后端全绿；`moon check --deny-warn` 与 `moon fmt --check` 在 CI 里全绿。核心断言：
+166 个测试，两个后端全绿；`moon check --deny-warn` 与 `moon fmt --check` 在 CI 里全绿。核心断言：
 
 - 定点数与 `Double` 对拍误差不超过 4 个 LSB；
 - FNV-1a 64 对 `"hello"` 命中标准向量 `0xa430d84680aabd0b`；
@@ -232,7 +254,11 @@ moon run cmd/main --target wasm-gc
 - 示例层：干净链路零失配；注入一处输入不一致后，分叉被报在恰好那一帧上；
   同参数两次运行的统计量逐项相等；
 - 掉线：宣布之后确认帧从掉线前那一帧补到当前帧，其余玩家逐帧哈希仍一致；重连不回退；
-  本地玩家不能被标成掉线、最后一名在线玩家不能被踢、越界索引返回 `false`。
+  本地玩家不能被标成掉线、最后一名在线玩家不能被踢、越界索引返回 `false`；
+- 重同步：整段替换后恢复点及之后逐帧哈希重新一致，继续推进不再分叉，确认帧与本地输入环
+  不回退；未来帧、0 帧、超出快照窗口的帧一律拒绝且会话不变；
+- 状态帧：`Snap` / `SnapAsk` 往返一致，帧号 0、长度超 64 KiB、声明长度超出实际字节一律 `None`；
+- resync 示例：无丢包时一次往返修好，4% 丢包下靠重试收敛，干净局重同步次数为 0。
 
 ## Roadmap
 
@@ -243,8 +269,8 @@ moon run cmd/main --target wasm-gc
 - **V0.5** 三个可运行示例 + 零警告 CI + 架构文档（已完成）
 - **V0.6** 1..8 人同局：每玩家一条输入环、`step_players` 接入、协议带玩家索引、四人对局示例（已完成）
 - **V0.7** 掉线语义：在线集合、确认帧只等在线玩家、重连不回退、协议 `Active` 帧、掉线示例（已完成）
-- **V0.8** 带宽：`InputSpan` 区间帧 + 变化掩码、对端水位自适应、校验和降频、带宽示例（当前）
-- **V0.9** 分叉恢复：失配后从快照全量重同步
+- **V0.8** 带宽：`InputSpan` 区间帧 + 变化掩码、对端水位自适应、校验和降频、带宽示例（已完成）
+- **V0.9** 分叉恢复：`export_state` / `resync_from`、`Snap` / `SnapAsk` 帧、重同步示例（当前）
 - **V1.0** CI 三后端一致性、文档、mooncakes 发布
 
 ## 明确不做

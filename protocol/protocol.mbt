@@ -1,5 +1,6 @@
 ///|
-/// 紧凑字节协议：输入帧 / 输入区间帧 / 确认帧 / 校验和帧 / 在线状态帧。
+/// 紧凑字节协议：输入帧 / 输入区间帧 / 确认帧 / 校验和帧 / 在线状态帧 /
+/// 全量状态帧 / 状态请求帧。
 ///
 /// 线上格式（小端，varint 为 LEB128）：
 /// ```
@@ -8,6 +9,8 @@
 /// Checksum : [0x03][varint frame][8 bytes hash]
 /// Active   : [0x04][varint player][varint active]
 /// InputSpan: [0x05][varint player][varint start][varint count][varint mask][varint bits] * popcount(mask)
+/// Snap     : [0x06][varint frame][varint len][byte] * len
+/// SnapAsk  : [0x07][varint frame]
 /// ```
 ///
 /// `Input` 里的 `inputs[i]` 是玩家 `player + i` 在同一帧的输入位图。
@@ -63,12 +66,35 @@ pub(all) struct ActiveFrame {
 } derive(Eq)
 
 ///|
+/// 某一帧的**完整状态**，用于分叉之后的全量重同步。
+///
+/// `state` 是 `Sim::save` 的原始字节，协议层不解释它——只有跑同一个 `Sim`
+/// 的对等体才读得懂。所以它是「可信对端之间」的帧，不是公开数据：
+/// 接收方要么把它原样交给 `Session::resync_from`，要么丢掉。
+pub(all) struct SnapFrame {
+  frame : Int32
+  state : Bytes
+} derive(Eq)
+
+///|
+/// 索取某一帧的完整状态。分叉被检测到之后，落后的一端发这个包，
+/// 由持有权威状态的那一端回一条 `Snap`。
+///
+/// 单独一个请求帧而不是把请求塞进 `Checksum`，是因为「报告不一致」和
+/// 「请求重同步」是两件事：前者可以每帧发，后者只该在对端明确落后时发一次。
+pub(all) struct SnapRequestFrame {
+  frame : Int32
+} derive(Eq)
+
+///|
 pub(all) enum Message {
   Input(InputFrame)
   Confirm(ConfirmFrame)
   Checksum(ChecksumFrame)
   Active(ActiveFrame)
   Span(InputSpanFrame)
+  Snap(SnapFrame)
+  SnapRequest(SnapRequestFrame)
 } derive(Eq)
 
 ///|
@@ -86,6 +112,12 @@ pub extend ActiveFrame with Eq::{not_equal, equal}
 
 ///|
 pub extend InputSpanFrame with Eq::{not_equal, equal}
+
+///|
+pub extend SnapFrame with Eq::{not_equal, equal}
+
+///|
+pub extend SnapRequestFrame with Eq::{not_equal, equal}
 
 ///|
 pub extend Message with Eq::{not_equal, equal}
@@ -120,6 +152,24 @@ pub fn ChecksumFrame::new(frame : Int32, hash : UInt64) -> ChecksumFrame {
 pub fn ActiveFrame::new(player : Int32, active : Bool) -> ActiveFrame {
   { player, active, }
 }
+
+///|
+pub fn SnapFrame::new(frame : Int32, state : Bytes) -> SnapFrame {
+  { frame, state, }
+}
+
+///|
+pub fn SnapRequestFrame::new(frame : Int32) -> SnapRequestFrame {
+  { frame, }
+}
+
+///|
+/// 一条 `Snap` 帧能携带的状态字节上限（64 KiB）。
+///
+/// 全量状态是「一整帧的世界」，正常只有几 KB；60fps 下再大的快照也不该
+/// 塞进单包。给一个明确上限，解码端就能在读到 `len` 的瞬间拒绝畸形包，
+/// 而不是为它分配一块任意大的内存。
+pub const MAX_SNAPSHOT : Int32 = 65536
 
 ///|
 /// 一段帧的输入上限：掩码是 64 位，再多就用两个包。
@@ -296,6 +346,20 @@ fn encode_into(out : Array[Byte], msg : Message) -> Unit {
         put_varint(out, v)
       }
     }
+    Snap(f) => {
+      out.push((6).to_byte())
+      put_varint(out, f.frame.to_uint64())
+      put_varint(out, f.state.length().to_uint64())
+      let mut i = 0
+      while i < f.state.length() {
+        out.push(f.state[i])
+        i = i + 1
+      }
+    }
+    SnapRequest(f) => {
+      out.push((7).to_byte())
+      put_varint(out, f.frame.to_uint64())
+    }
   }
 }
 
@@ -438,6 +502,35 @@ fn decode_at(buf : Bytes, start : Int32) -> (Message, Int32)? {
         p,
       ),
     )
+  } else if tag == 6 {
+    let (frame, p1) = match get_varint(buf, pos) {
+      Some(pair) => pair
+      None => return None
+    }
+    let (len, p2) = match get_varint(buf, p1) {
+      Some(pair) => pair
+      None => return None
+    }
+    // 帧号从 1 起；长度不能超过单包上限；声明的长度必须真的在包里
+    if frame < 1UL || len > MAX_SNAPSHOT.to_uint64() {
+      return None
+    }
+    let n = len.to_int()
+    if p2 + n > buf.length() {
+      return None
+    }
+    let state = Bytes::makei(n, fn(i) { buf[p2 + i] })
+    Some((Snap({ frame: frame.to_int(), state, }), p2 + n))
+  } else if tag == 7 {
+    match get_varint(buf, pos) {
+      Some((frame, p)) =>
+        if frame < 1UL {
+          None
+        } else {
+          Some((SnapRequest({ frame: frame.to_int(), }), p))
+        }
+      None => None
+    }
   } else {
     None
   }

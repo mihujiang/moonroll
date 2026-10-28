@@ -1,0 +1,8 @@
+import {
+  "weopqrst/moonroll/protocol",
+  "weopqrst/moonroll/session",
+  "weopqrst/moonroll/sim_net",
+  "weopqrst/moonroll/examples/scene",
+}
+
+pkgtype(kind: "executable")

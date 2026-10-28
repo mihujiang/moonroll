@@ -24,6 +24,11 @@ pub struct Session[T] {
   mut replayed : Int64
   /// 单次回滚重放过的最大帧数，用来观察链路最坏情况。
   mut max_depth : Int32
+  /// 成功执行过的全量重同步次数（`resync_from`）。
+  ///
+  /// 它和 `rollbacks` 分开计：回滚是每帧都可能发生的常态，重同步是「世界
+  /// 已经对不上」之后的补救，正常情况下应该恒为 0。
+  mut resyncs : Int32
   /// 每个玩家一条输入环，按玩家索引排列。
   rings : Array[@input.InputRing]
   /// 每个玩家从帧 1 开始「连续收到」了到哪一帧。
@@ -124,6 +129,7 @@ pub fn[T : Sim] Session::with_players(
     rollbacks: 0,
     replayed: 0L,
     max_depth: 0,
+    resyncs: 0,
     rings,
     cont,
     active,
@@ -242,12 +248,88 @@ pub fn[T] Session::max_rollback_depth(self : Session[T]) -> Int32 {
 }
 
 ///|
+/// 成功执行过的全量重同步次数。
+///
+/// 正常情况下这个数应该恒为 0：它每加 1，就说明这一局已经分叉过一次、
+/// 又被人为掰回来了。把它打进日志/面板，是「确定性 bug 有没有再犯」的信号。
+pub fn[T] Session::resyncs(self : Session[T]) -> Int32 {
+  self.resyncs
+}
+
+///|
 /// 取某一帧模拟后的状态哈希（超出快照窗口、从未模拟过时为 `None`）。
 ///
 /// 两端在同一个**已确认帧**上比对这个哈希，才是「世界是否一致」的判据；
 /// 比对当前帧会把两端各自不同的预测误判成分叉。
 pub fn[T] Session::hash_at(self : Session[T], frame : Int32) -> UInt64? {
   self.hashes.get(frame)
+}
+
+///|
+/// 取某一帧的**完整状态字节**（就是 `Sim::save` 的产物），给对端做全量重同步。
+///
+/// 只在 `frame` 位于 `1..self.frame` 且还没被快照窗口覆盖时返回值；
+/// 太老的帧已经无法复现，只能取一个更近的帧。
+///
+/// 返回的字节是「谁的世界算数」的载体：拿到别人的 `Bytes` 之后交给
+/// `resync_from` 就能把本端掰到同一份世界。协议上对应 `Snap` 帧。
+pub fn[T] Session::export_state(self : Session[T], frame : Int32) -> Bytes? {
+  if frame < 1 || frame > self.frame {
+    return None
+  }
+  self.snaps.get(frame)
+}
+
+///|
+/// 用对端 `frame` 帧的完整状态覆盖本端，并重放到当前帧。
+///
+/// 这是分叉之后的补救：`hash_at` 在对端确认帧上比对失败，说明两边世界
+/// 已经不同，此时再回滚也没用——回滚只会从**本端**的快照恢复，把同一个
+/// 错误再算一遍。唯一能重新对齐的办法是拿一份权威状态整段替换。
+///
+/// 步骤：
+/// 1. `restore` 到 `frame` 那一帧（`frame` 必须落在回滚窗口内，否则那一段
+///    的输入已经被输入环淘汰，重放等于换一个地方重新分叉）；
+/// 2. 把 `frame` 之后已模拟的帧逐帧重放——输入环没动，所以帧号、本地输入
+///    的发送历史都不受影响；
+/// 3. 把在线玩家的连续指针抬到 `frame`：权威状态意味着这一帧之前已经结算，
+///    之后的回滚不会再退到「分裂之前的快照」上去。
+///
+/// 返回 `false` 表示参数不可用（帧号越界、超出窗口），会话保持不变。
+///
+/// 调用方要保证 `state` 来自**跑同一个 `Sim`** 的对等体；协议层只限制长度，
+/// 读不懂的字节交给 `restore` 是未定义行为。
+pub fn[T : Sim] Session::resync_from(
+  self : Session[T],
+  frame : Int32,
+  state : Bytes,
+) -> Bool {
+  if frame < 1 || frame > self.frame {
+    return false
+  }
+  if frame < self.frame - self.window {
+    return false
+  }
+  self.sim.restore(state)
+  self.snaps.set(frame, state)
+  self.hashes.set(frame, self.sim.hash())
+  // 只重放 frame 之后：frame 及之前的输入已经体现在这份状态里，
+  // 而且本端环里可能还留着分叉期间收到的错值。
+  let mut f = frame + 1
+  while f <= self.frame {
+    self.simulate(f)
+    f = f + 1
+  }
+  let mut i = 0
+  while i < self.num_players {
+    if self.active[i] && self.cont[i] < frame {
+      self.cont[i] = frame
+    }
+    i = i + 1
+  }
+  self.resyncs = self.resyncs + 1
+  self.update_confirmed()
+  true
 }
 
 ///|

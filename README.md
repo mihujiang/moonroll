@@ -5,10 +5,10 @@
 MoonBit 生态里"把两个玩家连起来还不漂移"这一层是空白。
 `moonroll` 补的就是这一层：不绑定任何引擎的确定性回滚同步（rollback netcode）。
 
-**状态：V0.8（带宽）**。定点数、状态哈希、每个玩家一条输入环、
-预测 / 确认 / 回滚重放、紧凑字节协议（含区间帧与变化掩码）、确定性延迟 / 抖动 / 丢包 / 乱序模拟器，
-一个把两个 `moonphys` 物理世界连起来的可视化演示，以及六个 `moon run` 就能跑的示例
-（含四人对局重放成本对比、掉线前后确认帧走势对比、六种发包策略的带宽对比）。
+**状态：V0.9（分叉恢复）**。定点数、状态哈希、每个玩家一条输入环、
+预测 / 确认 / 回滚重放、紧凑字节协议（含区间帧、变化掩码与全量状态帧）、确定性延迟 / 抖动 / 丢包 / 乱序模拟器，
+一个把两个 `moonphys` 物理世界连起来的可视化演示，以及七个 `moon run` 就能跑的示例
+（含四人对局重放成本对比、掉线前后确认帧走势对比、五种发包策略的带宽对比、分叉后的全量重同步）。
 `moon check --deny-warn` 与 `moon fmt --check` 在 CI 里全绿。
 
 设计取舍见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
@@ -102,6 +102,37 @@ peer.peer_confirmed(who)               // 它已确认到哪一帧（从没收�
 水位只会前进，迟到/重复的确认包不会把重发区间拽回去；丢包时水位停住，区间自动变长，
 被丢的输入照样补上。
 
+真出现分叉时，光报警没用：两端世界已经不同，回滚是从**本端**快照恢复的，只会把同一个
+错误再算一遍。V0.9 因此提供「取状态 / 换状态」两个动作，把落后的一端整段掰回来：
+
+```moonbit
+// 落后端：在对端确认帧上比对失败，那一帧就是最合适的恢复点
+if peer.hash_at(frame) != remote_hash {
+  // 1) 请求这一帧的完整状态
+  @protocol.SnapRequest(@protocol.SnapRequestFrame::new(frame))
+}
+
+// 权威端：把状态原样搬上线路（协议层不解释内容）
+if let Some(state) = peer.export_state(frame) {
+  @protocol.Snap(@protocol.SnapFrame::new(frame, state))
+}
+
+// 落后端：restore 到那一帧，再用本端输入环重放到当前帧
+peer.resync_from(frame, state)   // 帧号越界 / 超出快照窗口时返回 false
+peer.resyncs()                   // 正常情况下恒为 0
+```
+
+几点约束，都是「重放靠输入环」这一件事推出来的：
+
+- 恢复点必须落在快照窗口内：更早的输入已经被环淘汰，重放会用猜出来的值，等于换一个地方重新分叉；
+- 恢复后在线玩家的连续指针抬到恢复点，确认帧只前进不回退；
+- 本地输入环和帧号都不动，只是换了一份世界，玩家自己的发送历史不受影响；
+- 恢复点之前的旧哈希不会被改写——重同步修的是未来，不改写历史；
+- 协议只给 `Snap` 的状态字节设上限（64 KiB），内容只有跑同一个 `Sim` 的对等体读得懂。
+
+谁算权威是上层策略：两人局里就是「本地执行了 A 的那一端」，多人局按房主或多数票决定。
+两边同时互相纠正会来回覆盖。
+
 底层三个包可单独使用：
 
 ```moonbit
@@ -128,6 +159,8 @@ ring.set(frame, 0b101UL)
 | Checksum | `[0x03][varint frame][8 bytes hash]` |
 | Active | `[0x04][varint player][varint active]`（1 上线 / 0 掉线） |
 | InputSpan | `[0x05][varint player][varint start][varint count][varint mask][varint bits] × popcount(mask)` |
+| Snap | `[0x06][varint frame][varint len][len bytes 状态]` |
+| SnapAsk | `[0x07][varint frame]` |
 
 `Input` 里的 `inputs[i]` 是玩家 `player + i` 的输入：单人单帧就是 `player=自己, count=1`，
 `player + count` 不能越过 8 人上限。
@@ -135,6 +168,10 @@ ring.set(frame, 0b101UL)
 `InputSpan` 是同一个玩家的**一段连续帧**：`count` 是帧数（1..64），`mask` 的第 i 位
 表示 `start + i` 帧的输入是否随包发出，没置位的帧沿用包里前一个值。重发冗余输入时
 一个人一帧一条 `Input` 是 4 字节，一段 16 帧、按键只变三次时 `InputSpan` 只要 9 字节。
+
+`Snap` 携带某一帧的完整状态（`Sim::save` 的原始字节），`SnapAsk` 只是「把那一帧的状态
+给我」。两者是分叉恢复的配套帧：请求方发 `SnapAsk`，权威端回 `Snap`。状态长度上限
+64 KiB，`len` 越界或与实际字节数不符的包一律 `None`。
 
 ```moonbit
 let wire = @protocol.encode(@protocol.Message::Input(
@@ -166,7 +203,7 @@ net.in_flight()  // 在途包数
 时间单位是逻辑帧（60fps 下 1 帧 ≈ 16.7ms），内部是确定性 LCG：
 **同 seed、同发送序列必然得到同到达序列**，所以整条链路可以进单元测试和 fuzz。
 
-## 五个 `moon run` 就能跑的示例
+## 七个 `moon run` 就能跑的示例
 
 ```bash
 # 1) 最小闭环：两个 Session + 真实字节协议 + 3 帧延迟链路，逐帧打印收敛过程
@@ -186,6 +223,9 @@ moon run examples/drop_out
 
 # 6) 带宽：同样一局，五种发包策略的字节数对比（区间帧 / 掩码 / 自适应 / 校验和降频）
 moon run examples/bandwidth
+
+# 7) 分叉恢复：输入流出错后两端世界不同，用一份完整状态把落后者掰回来
+moon run examples/resync
 ```
 
 `latency_chart` 的真实输出（300 帧，60fps）：
@@ -252,6 +292,30 @@ moon run examples/bandwidth
 延迟比冗余还差的时候（10 帧延迟 + 25% 丢包），前四种的区间都会被对端水位顶到 15~16 帧，
 自适应策略自动退回保守值，确认帧照样追平到 600：**冗余可以配大，代价由链路自己决定**。
 
+`resync` 的真实输出（2 人，400 帧，3 帧延迟 + 2 帧抖动 + 4% 丢包 + 8% 乱序，
+1 号在第 100 帧把输入序列化错位）：
+
+```
+resync：分叉之后用完整状态把落后者掰回来
+
+链路：延迟 3 帧 + 抖动 2 帧 + 丢包 4% + 乱序 8%
+事故：1 号在第 100 帧本地执行 A、线上发 B（输入序列化错位）
+      两端的输入流从此不同，靠回滚永远追不回来
+
+P0 首次失配：确认帧 100 的状态哈希不同（共 11 次失配）
+P0 请求第 100 帧的完整状态：发出 2 个 SnapRequest
+P0 已恢复：restore 到第 100 帧（状态 8 字节），再用输入环重放
+
+确认帧：P0 400 / P1 400；回滚 P0 400 / P1 400
+重同步次数：P0 1；恢复后失配 0 次
+恢复后：从恢复点到结束，两端在共同确认帧上逐帧哈希一致
+注：恢复点之前的旧哈希留在落后者本地——重同步修的是未来，不改写历史。
+```
+
+11 次失配全在恢复之前：确认帧每前进一帧，落后端都会拿自己的哈希去比对一次，直到状态被替换。
+`SnapRequest` 发了 2 个，说明请求或应答被链路吞掉了一个；重试间隔 6 帧，而恢复帧号不变，
+所以重复请求是幂等的——这也是为什么恢复流程不需要额外的确认握手。
+
 `two_peer` 的循环是手写的，可以当接入模板读：每帧打包「最近 8 帧输入 + 确认帧 +
 校验和帧」，接收端解码后逐条投递。`desync_demo` 里那处故障注入用的是「本地执行 A、
 发出去的是 B」——不能直接去改内存里的状态，回滚会从快照恢复并把它洗掉。
@@ -312,8 +376,8 @@ python -m http.server --directory docs 8123
 | `weopqrst/moonroll/fixed` | Q16.16 定点数（`+ - * /`、开方、lerp、clamp） | V0.1 |
 | `weopqrst/moonroll/digest` | FNV-1a 64 状态哈希 | V0.1 |
 | `weopqrst/moonroll/input` | 帧号 -> 输入位图的环形缓冲 | V0.1 |
-| `weopqrst/moonroll/session` | `Sim` 协议 + 预测 / 确认 / 回滚重放 / 历史哈希 + 1..8 人会话 + 掉线语义 + 对端水位 | V0.2 |
-| `weopqrst/moonroll/protocol` | 输入帧、区间帧、确认帧、校验和帧、在线状态帧的字节编解码 | V0.3 |
+| `weopqrst/moonroll/session` | `Sim` 协议 + 预测 / 确认 / 回滚重放 / 历史哈希 + 1..8 人会话 + 掉线语义 + 对端水位 + 分叉重同步 | V0.2 |
+| `weopqrst/moonroll/protocol` | 输入帧、区间帧、确认帧、校验和帧、在线状态帧、全量状态帧的字节编解码 | V0.3 |
 | `weopqrst/moonroll/sim_net` | 延迟 / 抖动 / 丢包 / 乱序模拟器 | V0.3 |
 | `weopqrst/moonroll/adapters/phys` | `moonphys` 参考适配层（`PhysSim`） | V0.4 |
 | `weopqrst/moonroll/demo` | wasm-gc 演示引擎（`mr_*` 数值导出） | V0.4 |
@@ -324,6 +388,7 @@ python -m http.server --directory docs 8123
 | `weopqrst/moonroll/examples/four_peer` | 四人对局 + 2/4 人重放成本对比 | V0.6 |
 | `weopqrst/moonroll/examples/drop_out` | 掉线前后确认帧走势对比 | V0.7 |
 | `weopqrst/moonroll/examples/bandwidth` | 五种发包策略的字节数对比 | V0.8 |
+| `weopqrst/moonroll/examples/resync` | 分叉后的全量重同步 | V0.9 |
 
 ## 验证
 
@@ -335,10 +400,10 @@ moon test --target js
 node tools/check-demo.mjs  # 1800 帧 wasm 自检
 ```
 
-CI（`.github/workflows/ci.yml`）跑的就是这一串，外加六个示例的冒烟和
+CI（`.github/workflows/ci.yml`）跑的就是这一串，外加七个示例的冒烟和
 「提交的 `docs/engine.wasm` 必须与重新构建的产物逐字节一致」。
 
-153 个测试，两个后端全绿。核心断言：
+166 个测试，两个后端全绿。核心断言：
 
 - 定点数与 `Double` 对拍误差不超过 4 个 LSB；
 - FNV-1a 64 对 `"hello"` 命中标准向量 `0xa430d84680aabd0b`；
@@ -371,6 +436,14 @@ CI（`.github/workflows/ci.yml`）跑的就是这一串，外加六个示例的�
   `start` 为 0、`player` 越界、掩码越出 `count`、值不足一律返回 `None`；**
 - **带宽示例：五种策略喂同一局，回滚与重放次数逐项相等，字节数单调下降；
   25% 丢包 + 10 帧延迟下确认帧仍追平到 600；同参数两次运行字节数完全相同。**
+- **重同步：两端分叉后用对端 `export_state` 整段替换，恢复点及之后逐帧哈希重新一致，
+  继续推进 30 帧不再分叉；本地输入环与确认帧不回退。**
+- **重同步拒绝未来帧、0 帧和超出快照窗口的帧，被拒绝时会话状态不变；同一帧号导出的
+  字节与顺序重放到该帧的状态逐字节相同。**
+- **状态帧：`Snap` 空状态合法、1000 帧号 + 64 字节状态往返一致；`SnapAsk` 往返一致；
+  帧号 0、长度超 64 KiB、声明长度超出实际字节、请求帧号 0 一律 `None`。**
+- **resync 示例：无丢包时一次往返修好（失配帧 = 事故帧 = 恢复点）；4% 丢包下靠重试
+  收敛；干净局与事故帧在收尾之后的局重同步次数都是 0。**
 
 ## Roadmap
 
@@ -381,8 +454,8 @@ CI（`.github/workflows/ci.yml`）跑的就是这一串，外加六个示例的�
 - **V0.5** 三个可运行示例 + 零警告 CI（`--deny-warn`、`fmt --check`、demo 产物校验）+ 架构文档（已完成）
 - **V0.6** 1..8 人同局：每玩家一条输入环、`step_players` 接入、协议带玩家索引、四人对局示例（已完成）
 - **V0.7** 掉线语义：在线集合、确认帧只等在线玩家、重连不回退、协议 `Active` 帧、掉线示例（已完成）
-- **V0.8** 带宽：`InputSpan` 区间帧 + 变化掩码、对端水位自适应重发、校验和降频、带宽示例（当前）
-- **V0.9** 分叉恢复：检测到失配后从快照全量重同步，而不是只报帧号
+- **V0.8** 带宽：`InputSpan` 区间帧 + 变化掩码、对端水位自适应重发、校验和降频、带宽示例（已完成）
+- **V0.9** 分叉恢复：`export_state` / `resync_from`、`Snap` / `SnapAsk` 帧、重同步示例（当前）
 - **V1.0** GitHub Pages 在线演示、验收脚本、mooncakes 发布
 
 ## 明确不做

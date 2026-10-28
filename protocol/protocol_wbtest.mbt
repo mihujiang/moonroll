@@ -286,3 +286,71 @@ test "malformed input spans are rejected" {
   let short = Bytes::makei(5, fn(i) { [5, 1, 10, 2, 3][i].to_byte() })
   assert_true(decode(short) is None)
 }
+
+///|
+test "snap frame carries opaque state bytes" {
+  let state = Bytes::makei(64, fn(i) { (i * 7).to_byte() })
+  let msg = Snap(SnapFrame::new(1234, state))
+  match decode(encode(msg)) {
+    Some(m) => {
+      assert_true(m == msg)
+      match m {
+        Snap(f) => {
+          assert_eq(f.frame, 1234)
+          assert_eq(f.state.length(), 64)
+          assert_eq(f.state[63].to_int(), (63 * 7) & 0xFF)
+        }
+        _ => assert_true(false)
+      }
+    }
+    None => assert_true(false)
+  }
+  // 空状态也是合法的：状态内容归 Sim 管，协议只负责搬运
+  let empty = Bytes::new(0)
+  assert_eq(encode(Snap(SnapFrame::new(1, empty))).length(), 3)
+  // tag(1) + varint frame(2) + varint len(1) + 状态字节(64)
+  assert_eq(encode(Snap(SnapFrame::new(1000, state))).length(), 68)
+}
+
+///|
+test "snap request roundtrip" {
+  let msg = SnapRequest(SnapRequestFrame::new(4321))
+  assert_eq(encode(msg).length(), 3)
+  match decode(encode(msg)) {
+    Some(m) => assert_true(m == msg)
+    None => assert_true(false)
+  }
+}
+
+///|
+test "malformed snap frames are rejected" {
+  // 帧号 0（帧号从 1 开始）
+  let zero_frame = Bytes::makei(3, fn(i) { [6, 0, 0][i].to_byte() })
+  assert_true(decode(zero_frame) is None)
+  // 长度超过单包上限 65536：65537 = 0x81 0x80 0x04
+  let too_big = Bytes::makei(5, fn(i) { [6, 1, 0x81, 0x80, 0x04][i].to_byte() })
+  assert_true(decode(too_big) is None)
+  // 声明 10 字节，包里只有 3 字节
+  let truncated = Bytes::makei(6, fn(i) { [6, 1, 10, 1, 2, 3][i].to_byte() })
+  assert_true(decode(truncated) is None)
+  // 请求帧的帧号不能是 0
+  let zero_ask = Bytes::makei(2, fn(i) { [7, 0][i].to_byte() })
+  assert_true(decode(zero_ask) is None)
+}
+
+///|
+test "snap frames survive a batch" {
+  let state = Bytes::makei(5, fn(i) { (i + 1).to_byte() })
+  let msgs : Array[Message] = [
+    SnapRequest(SnapRequestFrame::new(90)),
+    Snap(SnapFrame::new(90, state)),
+    Confirm(ConfirmFrame::new(91)),
+  ]
+  let back = decode_batch(encode_batch(msgs))
+  assert_eq(back.length(), 3)
+  let mut i = 0
+  while i < msgs.length() {
+    assert_true(back[i] == msgs[i])
+    i = i + 1
+  }
+}
