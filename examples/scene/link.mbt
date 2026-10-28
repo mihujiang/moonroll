@@ -57,11 +57,16 @@ pub fn apply(payload : Bytes, s : @session.Session[Scene]) -> Int32 {
           i = i + 1
         }
       }
+      // 只在**本端也已确认**的帧上比对：尚未确认的帧里还混着预测输入，
+      // 和对方的真实输入本来就不同，比了只会得到假分叉。
       @protocol.Checksum(c) =>
-        match s.hash_at(c.frame) {
-          Some(mine) => if mine != c.hash { bad = bad + 1 }
-          None => ()
+        if c.frame <= s.confirmed() {
+          match s.hash_at(c.frame) {
+            Some(mine) => if mine != c.hash { bad = bad + 1 }
+            None => ()
+          }
         }
+      @protocol.Active(a) => ignore(s.set_player_active(a.player, a.active))
       _ => ()
     }
   }

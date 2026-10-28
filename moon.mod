@@ -3,7 +3,7 @@
 
 name = "weopqrst/moonroll"
 
-version = "0.6.0"
+version = "0.7.0"
 
 readme = "README.mbt.md"
 
@@ -15,7 +15,7 @@ keywords = [ "netcode", "rollback", "determinism", "fixed-point", "game" ]
 
 preferred_target = "wasm-gc"
 
-description = "Sans-IO deterministic rollback netcode for MoonBit: input ring buffer, prediction, rollback re-simulation, state checksums, compact byte protocol, deterministic link simulator, a moonphys wasm-gc demo, four runnable examples, and 1..8 player sessions."
+description = "Sans-IO deterministic rollback netcode for MoonBit: input ring buffer, prediction, rollback re-simulation, state checksums, compact byte protocol, deterministic link simulator, a moonphys wasm-gc demo, five runnable examples, 1..8 player sessions, and drop/rejoin handling."
 
 import {
   "weopqrst/moonphys@0.2.2",

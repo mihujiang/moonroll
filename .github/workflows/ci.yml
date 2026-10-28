@@ -44,6 +44,7 @@ jobs:
           moon run examples/latency_chart
           moon run examples/desync_demo
           moon run examples/four_peer
+          moon run examples/drop_out
 
   demo:
     runs-on: ubuntu-latest

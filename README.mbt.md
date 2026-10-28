@@ -5,9 +5,9 @@
 MoonBit 生态里 ECS、物理、寻路、渲染、行为树都已经有人做，但"把两个玩家连起来还不漂移"这一层是空白。
 `moonroll` 补的就是这一层：不绑定任何引擎的确定性回滚同步（rollback netcode）。
 
-**状态：V0.6（1..8 人同局）**。定点数、状态哈希、输入环、预测 / 确认 / 回滚重放、
+**状态：V0.7（1..8 人同局 + 掉线语义）**。定点数、状态哈希、输入环、预测 / 确认 / 回滚重放、
 紧凑字节协议、确定性延迟 / 抖动 / 丢包 / 乱序模拟器，一个把两个 `moonphys` 物理世界连起来的
-可视化演示，以及四个 `moon run` 就能跑的示例（含四人对局与重放成本对比）。
+可视化演示，以及五个 `moon run` 就能跑的示例（含四人对局重放成本对比、掉线走势对比）。
 
 设计取舍见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
 
@@ -125,13 +125,14 @@ net.in_flight()  // 在途包数
 时间单位是逻辑帧（60fps 下 1 帧 ≈ 16.7ms），内部是确定性 LCG：
 **同 seed、同发送序列必然得到同到达序列**，所以整条链路可以进单元测试和 fuzz。
 
-## 四个 `moon run` 就能跑的示例
+## 五个 `moon run` 就能跑的示例
 
 ```bash
 moon run examples/two_peer        # 最小闭环：两个 Session + 字节协议 + 3 帧延迟
 moon run examples/latency_chart   # 8 条典型链路的回滚成本表
 moon run examples/desync_demo     # 分叉检测自证：注入输入不一致，报出确切帧号
 moon run examples/four_peer       # 四人对局：12 条链路全互联 + 2/4 人成本对比
+moon run examples/drop_out        # 掉线：宣布 / 不宣布掉线的确认帧走势对比
 ```
 
 `latency_chart` 的真实输出（300 帧，60fps，全部 `desync=0`）：
@@ -198,6 +199,7 @@ python -m http.server --directory docs 8123   # 打开 http://localhost:8123/
 | `weopqrst/moonroll/examples/latency_chart` | 延迟 / 抖动 / 丢包扫描表 | V0.5 |
 | `weopqrst/moonroll/examples/desync_demo` | 分叉检测自证 | V0.5 |
 | `weopqrst/moonroll/examples/four_peer` | 四人对局 + 2/4 人重放成本对比 | V0.6 |
+| `weopqrst/moonroll/examples/drop_out` | 掉线前后确认帧走势对比 | V0.7 |
 
 ## 验证
 
@@ -207,7 +209,7 @@ moon test --target js
 moon run cmd/main --target wasm-gc
 ```
 
-133 个测试，两个后端全绿；`moon check --deny-warn` 与 `moon fmt --check` 在 CI 里全绿。核心断言：
+143 个测试，两个后端全绿；`moon check --deny-warn` 与 `moon fmt --check` 在 CI 里全绿。核心断言：
 
 - 定点数与 `Double` 对拍误差不超过 4 个 LSB；
 - FNV-1a 64 对 `"hello"` 命中标准向量 `0xa430d84680aabd0b`；
@@ -225,7 +227,9 @@ moon run cmd/main --target wasm-gc
 - 15% 丢包下回滚次数大于零，但两端仍是 `desync=0`（重发把丢掉的输入补齐）；
 - `hash_at` 在回滚重放后返回重放结果，超出快照窗口后返回 `None`；
 - 示例层：干净链路零失配；注入一处输入不一致后，分叉被报在恰好那一帧上；
-  同参数两次运行的统计量逐项相等。
+  同参数两次运行的统计量逐项相等；
+- 掉线：宣布之后确认帧从掉线前那一帧补到当前帧，其余玩家逐帧哈希仍一致；重连不回退；
+  本地玩家不能被标成掉线、最后一名在线玩家不能被踢、越界索引返回 `false`。
 
 ## Roadmap
 
@@ -234,7 +238,9 @@ moon run cmd/main --target wasm-gc
 - **V0.3** 字节协议 + 延迟/抖动/丢包/乱序模拟 + fuzz（已完成）
 - **V0.4** 接入 `moonphys` 的 wasm-gc 可视化演示（双世界对照、回滚计数、延迟滑块）（已完成）
 - **V0.5** 三个可运行示例 + 零警告 CI + 架构文档（已完成）
-- **V0.6** 1..8 人同局：每玩家一条输入环、`step_players` 接入、协议带玩家索引、四人对局示例（当前）
+- **V0.6** 1..8 人同局：每玩家一条输入环、`step_players` 接入、协议带玩家索引、四人对局示例（已完成）
+- **V0.7** 掉线语义：在线集合、确认帧只等在线玩家、重连不回退、协议 `Active` 帧、掉线示例（当前）
+- **V0.8** 带宽：输入帧增量打包、多帧合并发送
 - **V1.0** CI 三后端一致性、文档、mooncakes 发布
 
 ## 明确不做

@@ -111,6 +111,39 @@ test "garbage buffers never panic" {
 }
 
 ///|
+test "active frame layout and roundtrip" {
+  // tag + varint player + varint active
+  let off = encode(Active(ActiveFrame::new(3, false)))
+  assert_eq(off.length(), 3)
+  assert_eq(off[0].to_int(), 4)
+  assert_eq(off[1].to_int(), 3)
+  assert_eq(off[2].to_int(), 0)
+  let mut seed = 424242UL
+  let mut i = 0
+  while i < 500 {
+    seed = lcg(seed)
+    let player = (seed % 8UL).to_int()
+    seed = lcg(seed)
+    let msg = Active(ActiveFrame::new(player, seed % 2UL == 1UL))
+    match decode(encode(msg)) {
+      Some(m) => assert_true(m == msg)
+      None => assert_true(false)
+    }
+    i = i + 1
+  }
+}
+
+///|
+test "malformed active frames are rejected" {
+  // player=9 越界
+  let bad_player = Bytes::makei(3, fn(i) { [4, 9, 1][i].to_byte() })
+  assert_true(decode(bad_player) is None)
+  // active=2 不是 0/1
+  let bad_state = Bytes::makei(3, fn(i) { [4, 1, 2][i].to_byte() })
+  assert_true(decode(bad_state) is None)
+}
+
+///|
 test "oversized player count is rejected" {
   // 手工构造 count=9 的输入帧：tag=1, player=0, frame=1, count=9
   let bytes = Bytes::makei(4, fn(i) { [1, 0, 1, 9][i].to_byte() })

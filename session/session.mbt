@@ -2,12 +2,13 @@
 /// 回滚会话：持有模拟器、每个玩家一条输入环、窗口内快照，负责预测、确认与重放。
 ///
 /// 帧号从 1 开始，0 表示初始状态。`frame` 是本地已模拟到的最新帧，
-/// `confirmed` 是所有玩家输入都已到达的最大帧（其之前的帧不会再回滚）。
+/// `confirmed` 是所有**在线**玩家输入都已到达的最大帧（其之前的帧不会再回滚）。
 ///
 /// 典型循环（每帧一次）：
 /// 1. 本地推进：`advance(本地输入)`
 /// 2. 把 `player_input(本地玩家, 帧)` 发给其他玩家
 /// 3. 收到某玩家输入时调用 `receive_from(玩家, 帧, 输入)`
+/// 4. 有人掉线时调用 `set_player_active(玩家, false)`，并把同样的决定同步给全房
 ///
 /// 玩家数在构造时固定，1..`MAX_PLAYERS`（8）人；双人局可以用更短的
 /// `receive(帧, 输入)`，它会自动推断对端是另一个玩家。
@@ -25,6 +26,14 @@ pub struct Session[T] {
   mut max_depth : Int32
   /// 每个玩家一条输入环，按玩家索引排列。
   rings : Array[@input.InputRing]
+  /// 每个玩家从帧 1 开始「连续收到」了到哪一帧。
+  ///
+  /// 掉线期间该玩家不会有输入到达，重连时把指针直接抬到当前确认帧，
+  /// 这样中间的空洞不会把确认帧永久卡住。
+  cont : Array[Int32]
+  /// 每个玩家是否在线。掉线的玩家保留槽位（模拟器仍然需要 N 路输入），
+  /// 但不再参与确认帧的推进。
+  active : Array[Bool]
   /// 每帧复用的一张输入表，`inputs[i]` 是第 i 个玩家本帧的输入。
   buf : Array[UInt64]
   snaps : SnapshotRing
@@ -79,6 +88,14 @@ pub fn[T : Sim] Session::with_players(
     rings.push(@input.InputRing::new(cap))
     i = i + 1
   }
+  let cont : Array[Int32] = []
+  let active : Array[Bool] = []
+  let mut k = 0
+  while k < n {
+    cont.push(0)
+    active.push(true)
+    k = k + 1
+  }
   let snaps = SnapshotRing::new(cap)
   let hashes = HashRing::new(cap)
   // 帧 0 是初始状态，必须留下快照，否则第一次回滚没有可恢复点
@@ -101,6 +118,8 @@ pub fn[T : Sim] Session::with_players(
     replayed: 0L,
     max_depth: 0,
     rings,
+    cont,
+    active,
     buf: Array::make(n, 0UL),
     snaps,
     hashes,
@@ -116,6 +135,67 @@ pub fn[T] Session::local_player(self : Session[T]) -> Int32 {
 /// 这一局的玩家数。
 pub fn[T] Session::player_count(self : Session[T]) -> Int32 {
   self.num_players
+}
+
+///|
+/// 某个玩家是否在线。掉线的玩家仍然占一个输入槽位（模拟器的输入表长度
+/// 不变），但不再参与确认帧的推进。
+pub fn[T] Session::is_active(self : Session[T], player : Int32) -> Bool {
+  if player < 0 || player >= self.num_players {
+    false
+  } else {
+    self.active[player]
+  }
+}
+
+///|
+/// 当前在线玩家数（未掉线的人数）。
+pub fn[T] Session::online_count(self : Session[T]) -> Int32 {
+  let mut n = 0
+  let mut i = 0
+  while i < self.num_players {
+    if self.active[i] {
+      n = n + 1
+    }
+    i = i + 1
+  }
+  n
+}
+
+///|
+/// 声明玩家 `player` 上线 / 掉线，返回状态是否真的改变。
+///
+/// 「什么时候算掉线」是上层的策略（超时阈值、房主踢人），本库不替你决定；
+/// 它只提供一个同步点：**所有会话必须用相同的在线集合推进**，否则确认帧会
+/// 各不相同。掉线期间该玩家的输入退化为「窗口内最近一次已知值、否则 0」，
+/// 这对所有对等体都是同一套确定性规则，因此不会引入分叉。
+///
+/// 两种调用会被安全忽略：把本地玩家标成掉线；把最后一名在线玩家标成掉线。
+pub fn[T] Session::set_player_active(
+  self : Session[T],
+  player : Int32,
+  on : Bool,
+) -> Bool {
+  if player < 0 || player >= self.num_players {
+    return false
+  }
+  if self.active[player] == on {
+    return false
+  }
+  if player == self.local_id && !on {
+    return false
+  }
+  if !on && self.online_count() <= 1 {
+    return false
+  }
+  self.active[player] = on
+  if on && self.cont[player] < self.confirmed {
+    // 掉线期间的输入永远不会补到齐：把连续指针抬到当前确认帧，
+    // 该玩家从这之后重新贡献输入，确认帧不会因此回退。
+    self.cont[player] = self.confirmed
+  }
+  self.update_confirmed()
+  true
 }
 
 ///|
@@ -183,6 +263,7 @@ pub fn[T : Sim] Session::advance(
 ) -> Int32 {
   self.frame = self.frame + 1
   self.rings[self.local_id].set(self.frame, local_input)
+  self.cont[self.local_id] = self.frame
   self.simulate(self.frame)
   self.update_confirmed()
   self.frame
@@ -225,6 +306,11 @@ pub fn[T : Sim] Session::receive_from(
     return
   }
   self.rings[player].set(frame, remote_input)
+  let mut c = self.cont[player]
+  while self.rings[player].has(c + 1) {
+    c = c + 1
+  }
+  self.cont[player] = c
   if frame <= self.frame && frame > self.confirmed {
     self.replay_from(frame - 1)
   }
@@ -298,26 +384,21 @@ fn[T : Sim] Session::replay_from(self : Session[T], base : Int32) -> Unit {
 }
 
 ///|
-/// 确认帧只有在**所有**玩家的输入都到齐时才前进。
+/// 确认帧 = 所有**在线**玩家都连续收到的最高帧（不超过本地已模拟帧）。
+///
+/// 掉线的玩家被排除在外——否则一个人不再发包，全房确认帧就永久停住，
+/// 回滚窗口用尽后所有人退化成「接受分叉」。只前进不后退，重连也不会让
+/// 确认帧回退。
 fn[T] Session::update_confirmed(self : Session[T]) -> Unit {
-  let mut c = self.confirmed
-  let mut running = true
-  while running && c < self.frame {
-    let mut i = 0
-    let mut all = true
-    while i < self.num_players {
-      if self.rings[i].has(c + 1) {
-        ()
-      } else {
-        all = false
-      }
-      i = i + 1
+  let mut c = self.frame
+  let mut i = 0
+  while i < self.num_players {
+    if self.active[i] && self.cont[i] < c {
+      c = self.cont[i]
     }
-    if all {
-      c = c + 1
-    } else {
-      running = false
-    }
+    i = i + 1
   }
-  self.confirmed = c
+  if c > self.confirmed {
+    self.confirmed = c
+  }
 }

@@ -1,11 +1,12 @@
 ///|
-/// 紧凑字节协议：输入帧 / 确认帧 / 校验和帧。
+/// 紧凑字节协议：输入帧 / 确认帧 / 校验和帧 / 在线状态帧。
 ///
 /// 线上格式（小端，varint 为 LEB128）：
 /// ```
 /// Input    : [0x01][varint player][varint frame][varint count][varint bits] * count
 /// Confirm  : [0x02][varint frame]
 /// Checksum : [0x03][varint frame][8 bytes hash]
+/// Active   : [0x04][varint player][varint active]
 /// ```
 ///
 /// `Input` 里的 `inputs[i]` 是玩家 `player + i` 在同一帧的输入位图。
@@ -29,10 +30,21 @@ pub(all) struct ChecksumFrame {
 } derive(Eq)
 
 ///|
+/// 某个玩家上线 / 掉线的声明。`active = 1` 是上线，`0` 是掉线。
+///
+/// 掉线本身不是协议层的判断（网络断没断只有上层知道），这里只负责把
+/// 上层的决定可靠地同步给其他对等体，让所有人用同一个在线集合推进确认帧。
+pub(all) struct ActiveFrame {
+  player : Int32
+  active : Bool
+} derive(Eq)
+
+///|
 pub(all) enum Message {
   Input(InputFrame)
   Confirm(ConfirmFrame)
   Checksum(ChecksumFrame)
+  Active(ActiveFrame)
 } derive(Eq)
 
 ///|
@@ -44,6 +56,9 @@ pub extend ConfirmFrame with Eq::{not_equal, equal}
 
 ///|
 pub extend ChecksumFrame with Eq::{not_equal, equal}
+
+///|
+pub extend ActiveFrame with Eq::{not_equal, equal}
 
 ///|
 pub extend Message with Eq::{not_equal, equal}
@@ -72,6 +87,11 @@ pub fn ConfirmFrame::new(frame : Int32) -> ConfirmFrame {
 ///|
 pub fn ChecksumFrame::new(frame : Int32, hash : UInt64) -> ChecksumFrame {
   { frame, hash, }
+}
+
+///|
+pub fn ActiveFrame::new(player : Int32, active : Bool) -> ActiveFrame {
+  { player, active, }
 }
 
 ///|
@@ -150,6 +170,11 @@ fn encode_into(out : Array[Byte], msg : Message) -> Unit {
       put_varint(out, f.frame.to_uint64())
       put_u64(out, f.hash)
     }
+    Active(f) => {
+      out.push((4).to_byte())
+      put_varint(out, f.player.to_uint64())
+      put_varint(out, if f.active { 1UL } else { 0UL })
+    }
   }
 }
 
@@ -224,6 +249,20 @@ fn decode_at(buf : Bytes, start : Int32) -> (Message, Int32)? {
         }
       None => None
     }
+  } else if tag == 4 {
+    let (player, p1) = match get_varint(buf, pos) {
+      Some(pair) => pair
+      None => return None
+    }
+    let (active, p2) = match get_varint(buf, p1) {
+      Some(pair) => pair
+      None => return None
+    }
+    // 玩家索引 0..7，状态只能是 0 / 1；其他一律视为损坏
+    if player > 7UL || active > 1UL {
+      return None
+    }
+    Some((Active({ player: player.to_int(), active: active == 1UL, }), p2))
   } else {
     None
   }
