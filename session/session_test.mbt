@@ -22,8 +22,14 @@ impl @session.Sim for Counter with fn restore(self, bytes : Bytes) -> Unit {
 }
 
 ///|
-impl @session.Sim for Counter with fn step(self, a : UInt64, b : UInt64) -> Unit {
-  self.x = self.x * 31UL + (a & 0xFFUL) + ((b & 0xFFUL) << 32)
+impl @session.Sim for Counter with fn step_players(self, inputs : Array[UInt64]) -> Unit {
+  let mut x = self.x * 31UL
+  let mut i = 0
+  for bits in inputs {
+    x = x + ((bits & 0xFFUL) << (i * 8))
+    i = i + 1
+  }
+  self.x = x
 }
 
 ///|
@@ -75,7 +81,7 @@ test "two peers converge under 2 frame delay over 3000 frames" {
   let gold = { x: 0UL, }
   let mut g = 1
   while g <= total {
-    @session.Sim::step(gold, input_of(g, 0), input_of(g, 1))
+    @session.Sim::step_players(gold, [input_of(g, 0), input_of(g, 1)])
     g = g + 1
   }
   assert_eq(a.hash(), @session.Sim::hash(gold))
@@ -123,7 +129,7 @@ test "jittery out of order delivery still converges" {
   let gold = { x: 0UL, }
   let mut g = 1
   while g <= total {
-    @session.Sim::step(gold, input_of(g, 0), input_of(g, 1))
+    @session.Sim::step_players(gold, [input_of(g, 0), input_of(g, 1)])
     g = g + 1
   }
   assert_eq(a.hash(), @session.Sim::hash(gold))

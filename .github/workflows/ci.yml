@@ -43,6 +43,7 @@ jobs:
           moon run examples/two_peer
           moon run examples/latency_chart
           moon run examples/desync_demo
+          moon run examples/four_peer
 
   demo:
     runs-on: ubuntu-latest

@@ -5,10 +5,10 @@
 MoonBit 生态里"把两个玩家连起来还不漂移"这一层是空白。
 `moonroll` 补的就是这一层：不绑定任何引擎的确定性回滚同步（rollback netcode）。
 
-**状态：V0.5（示例与 CI 收口）**。定点数、状态哈希、输入环、预测 / 确认 / 回滚重放、
+**状态：V0.6（1..8 人同局）**。定点数、状态哈希、每个玩家一条输入环、预测 / 确认 / 回滚重放、
 紧凑字节协议、确定性延迟 / 抖动 / 丢包 / 乱序模拟器，一个把两个 `moonphys` 物理世界连起来的
-可视化演示，以及三个 `moon run` 就能跑的示例。`moon check --deny-warn` 与 `moon fmt --check`
-在 CI 里全绿。
+可视化演示，以及四个 `moon run` 就能跑的示例（含四人对局与重放成本对比）。
+`moon check --deny-warn` 与 `moon fmt --check` 在 CI 里全绿。
 
 设计取舍见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
 
@@ -29,14 +29,15 @@ FMA 收缩、超越函数实现差异影响，所以提供一条纯整数的路�
 
 ```moonbit
 pub(open) trait Sim {
-  fn save(Self) -> Bytes            // 编码完整状态
-  fn restore(Self, Bytes) -> Unit   // 与 save 严格互逆
-  fn step(Self, UInt64, UInt64)     // 推进一帧，p0 / p1 是双方输入位图
-  fn hash(Self) -> UInt64           // 状态哈希，不一致即 desync
+  fn save(Self) -> Bytes                     // 编码完整状态
+  fn restore(Self, Bytes) -> Unit            // 与 save 严格互逆
+  fn step_players(Self, Array[UInt64])       // 推进一帧，inputs[i] 是第 i 个玩家的输入位图
+  fn hash(Self) -> UInt64                    // 状态哈希，不一致即 desync
 }
 ```
 
 接入成本约 30~50 行。库不假设任何引擎结构，只在每帧调用这四个方法。
+`step_players` 收到的数组由会话复用，只读不存，需要留用就把元素拷贝出来。
 
 ## 快速开始
 
@@ -46,22 +47,29 @@ moon add weopqrst/moonroll
 
 ```moonbit
 // 1) 实现 Sim（略去 save/restore/hash）
-impl @session.Sim for World with fn step(self, p0, p1) {
-  self.x = self.x * 31UL + p0 + (p1 << 32)
+impl @session.Sim for World with fn step_players(self, inputs) {
+  let mut x = self.x * 31UL
+  for i, bits in inputs {
+    x = x + (bits << (i * 4))
+  }
+  self.x = x
 }
 
-// 2) 每个对等体一个会话，local_id 是本地玩家（0 / 1）
-let peer = @session.Session::with_window(world, 0, 128)
+// 2) 每个对等体一个会话：with_players(世界, 人数, 本地玩家, 窗口)
+let peer = @session.Session::with_players(world, 4, 0, 128)
 
-// 3) 每帧推进；收到对端输入时自动回滚重放
+// 3) 每帧推进；收到某位玩家的输入时自动回滚重放
 ignore(peer.advance(my_input))
-peer.receive(remote_frame, opponent_input)
+peer.receive_from(who, frame, that_player_input)
 
-// 4) 双方定期比对
-if peer.hash() != remote_hash {
+// 4) 所有玩家定期在同一个已确认帧上比对
+if peer.hash_at(peer.confirmed()) != remote_hash_at_confirmed {
   // desync
 }
 ```
+
+双人局可以继续用 `Session::with_window(world, local_id, 128)` 和 `receive(frame, input)`，
+后者会自己推断对端是另一个玩家；3 人以上必须用 `receive_from`。
 
 底层三个包可单独使用：
 
@@ -84,9 +92,12 @@ ring.set(frame, 0b101UL)
 
 | 帧 | 布局 |
 | --- | --- |
-| Input | `[0x01][varint frame][varint count][varint bits] × count` |
+| Input | `[0x01][varint player][varint frame][varint count][varint bits] × count` |
 | Confirm | `[0x02][varint frame]` |
 | Checksum | `[0x03][varint frame][8 bytes hash]` |
+
+`Input` 里的 `inputs[i]` 是玩家 `player + i` 的输入：单人单帧就是 `player=自己, count=1`，
+`player + count` 不能越过 8 人上限。
 
 ```moonbit
 let wire = @protocol.encode(@protocol.Message::Input(
@@ -118,7 +129,7 @@ net.in_flight()  // 在途包数
 时间单位是逻辑帧（60fps 下 1 帧 ≈ 16.7ms），内部是确定性 LCG：
 **同 seed、同发送序列必然得到同到达序列**，所以整条链路可以进单元测试和 fuzz。
 
-## 三个 `moon run` 就能跑的示例
+## 四个 `moon run` 就能跑的示例
 
 ```bash
 # 1) 最小闭环：两个 Session + 真实字节协议 + 3 帧延迟链路，逐帧打印收敛过程
@@ -129,6 +140,9 @@ moon run examples/latency_chart
 
 # 3) 分叉检测自证：正常局不报警，注入一处输入不一致后被抓到具体帧号
 moon run examples/desync_demo
+
+# 4) 四人对局：12 条链路全互联，并对比 2 人 / 4 人局的重放成本
+moon run examples/four_peer
 ```
 
 `latency_chart` 的真实输出（300 帧，60fps）：
@@ -149,6 +163,21 @@ moon run examples/desync_demo
 **回滚次数恒等于帧数**——每帧都会收到一帧更早的输入，必然重放一次。真正随延迟
 增长的是「重放帧数」和「最大深度」，那才是 CPU 成本：局域网 300 帧重放 300 帧，
 跨洋 200ms 要重放 4229 帧（约 14 倍）。
+
+`four_peer` 的真实输出（4 人全互联 = 12 条链路，480 帧，3 帧延迟 + 1 帧抖动）：
+
+```
+终态（4 人局）：
+  一致 = true，首个分叉帧 = 无，校验失配 = 0
+  确认帧 = 480/480/480/480，回滚 = 6983，重放帧数 = 31968，最大深度 = 5
+
+同样 480 帧、同样链路参数下的规模对比：
+  玩家数  链路数  回滚次数  重放帧数  最大深度
+  2       2       960       4290      5
+  4       12      6983      31968     5
+```
+
+人数翻倍，重放帧数涨了约 7.5 倍：每个玩家都要为其他所有人的迟到输入各回滚一次。
 
 `two_peer` 的循环是手写的，可以当接入模板读：每帧打包「最近 8 帧输入 + 确认帧 +
 校验和帧」，接收端解码后逐条投递。`desync_demo` 里那处故障注入用的是「本地执行 A、
@@ -209,8 +238,8 @@ python -m http.server --directory docs 8123
 | `weopqrst/moonroll/fixed` | Q16.16 定点数（`+ - * /`、开方、lerp、clamp） | V0.1 |
 | `weopqrst/moonroll/digest` | FNV-1a 64 状态哈希 | V0.1 |
 | `weopqrst/moonroll/input` | 帧号 -> 输入位图的环形缓冲 | V0.1 |
-| `weopqrst/moonroll/session` | `Sim` 协议 + 预测 / 确认 / 回滚重放 / 历史哈希 | V0.2 |
-| `weopqrst/moonroll/protocol` | 输入帧、确认帧、校验和帧的字节编解码 | V0.3 |
+| `weopqrst/moonroll/session` | `Sim` 协议 + 预测 / 确认 / 回滚重放 / 历史哈希 + 1..8 人会话 | V0.2 |
+| `weopqrst/moonroll/protocol` | 输入帧（带玩家索引）、确认帧、校验和帧的字节编解码 | V0.3 |
 | `weopqrst/moonroll/sim_net` | 延迟 / 抖动 / 丢包 / 乱序模拟器 | V0.3 |
 | `weopqrst/moonroll/adapters/phys` | `moonphys` 参考适配层（`PhysSim`） | V0.4 |
 | `weopqrst/moonroll/demo` | wasm-gc 演示引擎（`mr_*` 数值导出） | V0.4 |
@@ -218,6 +247,7 @@ python -m http.server --directory docs 8123
 | `weopqrst/moonroll/examples/two_peer` | 最小联机闭环 | V0.5 |
 | `weopqrst/moonroll/examples/latency_chart` | 延迟 / 抖动 / 丢包扫描表 | V0.5 |
 | `weopqrst/moonroll/examples/desync_demo` | 分叉检测自证 | V0.5 |
+| `weopqrst/moonroll/examples/four_peer` | 四人对局 + 2/4 人重放成本对比 | V0.6 |
 
 ## 验证
 
@@ -229,10 +259,10 @@ moon test --target js
 node tools/check-demo.mjs  # 1800 帧 wasm 自检
 ```
 
-CI（`.github/workflows/ci.yml`）跑的就是这一串，外加三个示例的冒烟和
+CI（`.github/workflows/ci.yml`）跑的就是这一串，外加四个示例的冒烟和
 「提交的 `docs/engine.wasm` 必须与重新构建的产物逐字节一致」。
 
-122 个测试，两个后端全绿。核心断言：
+133 个测试，两个后端全绿。核心断言：
 
 - 定点数与 `Double` 对拍误差不超过 4 个 LSB；
 - FNV-1a 64 对 `"hello"` 命中标准向量 `0xa430d84680aabd0b`；
@@ -252,6 +282,10 @@ CI（`.github/workflows/ci.yml`）跑的就是这一串，外加三个示例的�
 - **示例层：干净链路零失配；注入一处输入不一致后，分叉被报在**恰好那一帧**上，
   且两端哈希不同；同参数两次运行的统计量逐项相等；重放帧数随延迟显著增长而
   回滚次数恒等于帧数。**
+- **4 人局 200 帧、输入同帧送达：零回滚，四端逐帧历史哈希完全相同；**
+- **4 人局里一名玩家恒定迟到 5 帧：其余三端反复回滚，补齐后 240 帧逐帧哈希仍相同；**
+- **越界玩家索引、以及 N>2 时误用双人 `receive` 都被安全忽略；玩家数被钳制在 1..8；**
+- **四人对局示例：同参数两次运行统计量逐项相等；4 人局重放帧数显著大于 2 人局。**
 
 ## Roadmap
 
@@ -259,7 +293,8 @@ CI（`.github/workflows/ci.yml`）跑的就是这一串，外加三个示例的�
 - **V0.2** 回滚会话：预测、确认、快照/恢复、重放（已完成）
 - **V0.3** 字节协议 + 延迟/抖动/丢包/乱序模拟 + fuzz（已完成）
 - **V0.4** 接入 `moonphys` 的 wasm-gc 可视化演示（双世界对照、回滚计数、延迟滑块）（已完成）
-- **V0.5** 三个可运行示例 + 零警告 CI（`--deny-warn`、`fmt --check`、demo 产物校验）+ 架构文档（当前）
+- **V0.5** 三个可运行示例 + 零警告 CI（`--deny-warn`、`fmt --check`、demo 产物校验）+ 架构文档（已完成）
+- **V0.6** 1..8 人同局：每玩家一条输入环、`step_players` 接入、协议带玩家索引、四人对局示例（当前）
 - **V1.0** GitHub Pages 在线演示、验收脚本、mooncakes 发布
 
 ## 明确不做

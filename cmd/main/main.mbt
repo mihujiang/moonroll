@@ -26,8 +26,14 @@ impl @session.Sim for Demo with fn restore(self, bytes : Bytes) -> Unit {
 }
 
 ///|
-impl @session.Sim for Demo with fn step(self, a : UInt64, b : UInt64) -> Unit {
-  self.x = self.x * 31UL + (a & 0xFFUL) + ((b & 0xFFUL) << 32)
+impl @session.Sim for Demo with fn step_players(self, inputs : Array[UInt64]) -> Unit {
+  let mut x = self.x * 31UL
+  let mut i = 0
+  for bits in inputs {
+    x = x + ((bits & 0xFFUL) << (i * 8))
+    i = i + 1
+  }
+  self.x = x
 }
 
 ///|
@@ -45,10 +51,13 @@ fn input_of(frame : Int32, salt : Int32) -> UInt64 {
 fn apply(payload : Bytes, s : @session.Session[Demo]) -> Unit {
   for msg in @protocol.decode_batch(payload) {
     match msg {
-      @protocol.Input(x) =>
-        if x.inputs.length() > 0 {
-          s.receive(x.frame, x.inputs[0])
+      @protocol.Input(x) => {
+        let mut i = 0
+        for bits in x.inputs {
+          s.receive_from(x.player + i, x.frame, bits)
+          i = i + 1
         }
+      }
       _ => ()
     }
   }
@@ -145,10 +154,14 @@ fn main {
     let mut m = back
     while m <= n {
       ab.push(
-        @protocol.Message::Input(@protocol.InputFrame::new(m, [input_of(m, 0)])),
+        @protocol.Message::Input(
+          @protocol.InputFrame::new_from(0, m, [input_of(m, 0)]),
+        ),
       )
       ba.push(
-        @protocol.Message::Input(@protocol.InputFrame::new(m, [input_of(m, 1)])),
+        @protocol.Message::Input(
+          @protocol.InputFrame::new_from(1, m, [input_of(m, 1)]),
+        ),
       )
       m = m + 1
     }

@@ -3,11 +3,16 @@
 ///
 /// 线上格式（小端，varint 为 LEB128）：
 /// ```
-/// Input    : [0x01][varint frame][varint count][varint bits] * count
+/// Input    : [0x01][varint player][varint frame][varint count][varint bits] * count
 /// Confirm  : [0x02][varint frame]
 /// Checksum : [0x03][varint frame][8 bytes hash]
 /// ```
+///
+/// `Input` 里的 `inputs[i]` 是玩家 `player + i` 在同一帧的输入位图。
+/// 常见情况是「自己一个人的一帧」，即 `count = 1`；多人同帧批量补齐时
+/// `count` 才会大于 1。
 pub(all) struct InputFrame {
+  player : Int32
   frame : Int32
   inputs : Array[UInt64]
 } derive(Eq)
@@ -44,8 +49,19 @@ pub extend ChecksumFrame with Eq::{not_equal, equal}
 pub extend Message with Eq::{not_equal, equal}
 
 ///|
+/// 默认把 `inputs[0]` 当作玩家 0 的输入。
 pub fn InputFrame::new(frame : Int32, inputs : Array[UInt64]) -> InputFrame {
-  { frame, inputs, }
+  { player: 0, frame, inputs, }
+}
+
+///|
+/// `inputs[i]` 是玩家 `player + i` 的输入。
+pub fn InputFrame::new_from(
+  player : Int32,
+  frame : Int32,
+  inputs : Array[UInt64],
+) -> InputFrame {
+  { player, frame, inputs, }
 }
 
 ///|
@@ -118,6 +134,7 @@ fn encode_into(out : Array[Byte], msg : Message) -> Unit {
   match msg {
     Input(f) => {
       out.push((1).to_byte())
+      put_varint(out, f.player.to_uint64())
       put_varint(out, f.frame.to_uint64())
       put_varint(out, f.inputs.length().to_uint64())
       for bits in f.inputs {
@@ -160,33 +177,38 @@ fn decode_at(buf : Bytes, start : Int32) -> (Message, Int32)? {
   let tag = buf[start].to_int()
   let pos = start + 1
   if tag == 1 {
-    match get_varint(buf, pos) {
-      Some((frame, p1)) =>
-        match get_varint(buf, p1) {
-          Some((count, p2)) => {
-            // 一帧最多 8 个玩家的输入，超过即视为损坏
-            if count > 8UL {
-              return None
-            }
-            let inputs : Array[UInt64] = []
-            let mut p = p2
-            let mut i = 0
-            while i < count.to_int() {
-              match get_varint(buf, p) {
-                Some((bits, np)) => {
-                  inputs.push(bits)
-                  p = np
-                  i = i + 1
-                }
-                None => return None
-              }
-            }
-            Some((Input({ frame: frame.to_int(), inputs, }), p))
-          }
-          None => None
-        }
-      None => None
+    let (player, p1) = match get_varint(buf, pos) {
+      Some(pair) => pair
+      None => return None
     }
+    let (frame, p2) = match get_varint(buf, p1) {
+      Some(pair) => pair
+      None => return None
+    }
+    let (count, p3) = match get_varint(buf, p2) {
+      Some(pair) => pair
+      None => return None
+    }
+    // 玩家索引 0..7，且 player + count 不能越过 8 人上限，否则视为损坏
+    if player > 7UL || count > 8UL || player.to_int() + count.to_int() > 8 {
+      return None
+    }
+    let inputs : Array[UInt64] = []
+    let mut p = p3
+    let mut i = 0
+    while i < count.to_int() {
+      match get_varint(buf, p) {
+        Some((bits, np)) => {
+          inputs.push(bits)
+          p = np
+          i = i + 1
+        }
+        None => return None
+      }
+    }
+    Some(
+      (Input({ player: player.to_int(), frame: frame.to_int(), inputs, }), p),
+    )
   } else if tag == 2 {
     match get_varint(buf, pos) {
       Some((frame, p)) => Some((Confirm({ frame: frame.to_int(), }), p))

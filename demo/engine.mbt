@@ -69,8 +69,10 @@ fn apply_remote(
   s : @session.Session[@phys.PhysSim],
   frame : @protocol.InputFrame,
 ) -> Unit {
-  if frame.inputs.length() > 0 {
-    s.receive(frame.frame, frame.inputs[0])
+  let mut i = 0
+  for bits in frame.inputs {
+    s.receive_from(frame.player + i, frame.frame, bits)
+    i = i + 1
   }
 }
 
@@ -92,12 +94,12 @@ fn Demo::tick(self : Demo, p0 : UInt64, p1 : UInt64) -> Unit {
   while m <= f {
     ab.push(
       @protocol.Message::Input(
-        @protocol.InputFrame::new(m, [self.inputs[0][m - 1]]),
+        @protocol.InputFrame::new_from(0, m, [self.inputs[0][m - 1]]),
       ),
     )
     ba.push(
       @protocol.Message::Input(
-        @protocol.InputFrame::new(m, [self.inputs[1][m - 1]]),
+        @protocol.InputFrame::new_from(1, m, [self.inputs[1][m - 1]]),
       ),
     )
     m = m + 1

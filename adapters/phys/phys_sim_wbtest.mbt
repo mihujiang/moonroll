@@ -11,7 +11,7 @@ fn run_script(sim : PhysSim, from : Int32, to : Int32) -> Unit {
   let mut i = from
   while i < to {
     let (p0, p1) = scripted(i)
-    sim.step(p0, p1)
+    sim.step_players([p0, p1])
     i = i + 1
   }
 }

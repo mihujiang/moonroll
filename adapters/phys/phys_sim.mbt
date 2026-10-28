@@ -97,9 +97,9 @@ pub impl @session.Sim for PhysSim with fn restore(self, bytes) {
 }
 
 ///|
-pub impl @session.Sim for PhysSim with fn step(self, p0, p1) {
-  apply_input(self.world, self.body_p0, p0)
-  apply_input(self.world, self.body_p1, p1)
+pub impl @session.Sim for PhysSim with fn step_players(self, inputs) {
+  apply_input(self.world, self.body_p0, inputs[0])
+  apply_input(self.world, self.body_p1, inputs[1])
   self.world.step(STEP_DT)
 }
 
@@ -110,7 +110,7 @@ pub impl @session.Sim for PhysSim with fn hash(self) {
 
 ///|
 /// 显式声明方法提升（消除 W0079）。
-pub extend PhysSim with @session.Sim::{step, save, restore, hash}
+pub extend PhysSim with @session.Sim::{step_players, save, restore, hash}
 
 ///|
 /// Read access for rendering.

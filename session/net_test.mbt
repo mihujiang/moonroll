@@ -12,7 +12,11 @@ fn lcg(state : UInt64) -> UInt64 {
 fn feed(session : @session.Session[Counter], payload : Bytes) -> Int32 {
   match @protocol.decode(payload) {
     Some(@protocol.Input(frame)) => {
-      session.receive(frame.frame, frame.inputs[0])
+      let mut i = 0
+      for bits in frame.inputs {
+        session.receive_from(frame.player + i, frame.frame, bits)
+        i = i + 1
+      }
       0
     }
     Some(@protocol.Confirm(c)) => c.frame
@@ -52,14 +56,18 @@ fn run_net(
     // A -> B：重发未确认的本地输入
     let mut m = if f - RESEND > acked_a { f - RESEND } else { acked_a + 1 }
     while m <= f {
-      let msg = @protocol.Input(@protocol.InputFrame::new(m, [input_of(m, 0)]))
+      let msg = @protocol.Input(
+        @protocol.InputFrame::new_from(0, m, [input_of(m, 0)]),
+      )
       ignore(ab.send(f, @protocol.encode(msg)))
       m = m + 1
     }
     // B -> A：重发未确认的本地输入
     m = if f - RESEND > acked_b { f - RESEND } else { acked_b + 1 }
     while m <= f {
-      let msg = @protocol.Input(@protocol.InputFrame::new(m, [input_of(m, 1)]))
+      let msg = @protocol.Input(
+        @protocol.InputFrame::new_from(1, m, [input_of(m, 1)]),
+      )
       ignore(ba.send(f, @protocol.encode(msg)))
       m = m + 1
     }
@@ -88,13 +96,17 @@ fn run_net(
       acked_a + 1
     }
     while m <= total {
-      let msg = @protocol.Input(@protocol.InputFrame::new(m, [input_of(m, 0)]))
+      let msg = @protocol.Input(
+        @protocol.InputFrame::new_from(0, m, [input_of(m, 0)]),
+      )
       ignore(ab.send(now, @protocol.encode(msg)))
       m = m + 1
     }
     m = if total - RESEND > acked_b { total - RESEND } else { acked_b + 1 }
     while m <= total {
-      let msg = @protocol.Input(@protocol.InputFrame::new(m, [input_of(m, 1)]))
+      let msg = @protocol.Input(
+        @protocol.InputFrame::new_from(1, m, [input_of(m, 1)]),
+      )
       ignore(ba.send(now, @protocol.encode(msg)))
       m = m + 1
     }
@@ -157,7 +169,7 @@ test "representative network curves converge" {
   let gold = { x: 0UL, }
   let mut g = 1
   while g <= 300 {
-    @session.Sim::step(gold, input_of(g, 0), input_of(g, 1))
+    @session.Sim::step_players(gold, [input_of(g, 0), input_of(g, 1)])
     g = g + 1
   }
   let expected = @session.Sim::hash(gold)

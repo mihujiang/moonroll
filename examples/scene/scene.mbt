@@ -1,9 +1,9 @@
 ///|
-/// 三个示例共用的小世界。
+/// 示例共用的小世界，支持 1..8 个玩家。
 ///
-/// 两个玩家各有 3 个按键，状态是单个 64 位整数，每帧做一次乘法混合：
-/// 只要漏掉一帧输入、或者重放顺序不对，状态就会立刻分叉。示例里看到的
-/// 回滚与分叉检测因此是真实发生的，不是摆拍。
+/// 每个玩家各有 3 个按键，状态是单个 64 位整数，每帧把所有人的输入按下标
+/// 混进同一个数：只要漏掉一帧输入、或者重放顺序不对，状态就会立刻分叉。
+/// 示例里看到的回滚与分叉检测因此是真实发生的，不是摆拍。
 pub struct Scene {
   mut x : UInt64
 }
@@ -36,12 +36,21 @@ pub impl @session.Sim for Scene with fn restore(self, bytes : Bytes) -> Unit {
 }
 
 ///|
-pub impl @session.Sim for Scene with fn step(self, a : UInt64, b : UInt64) -> Unit {
-  // 两路输入分别落在低位/高位，再和自身相乘：任何一路缺失都会扩散到全部位。
-  let mixed = (self.x + (a & 7UL) * 0x9E3779B97F4A7C15UL + ((b & 7UL) << 11)) *
-    0xBF58476D1CE4E5B9UL +
-    0x94D049BB133111EBUL
-  self.x = mixed ^ (mixed >> 29)
+pub impl @session.Sim for Scene with fn step_players(
+  self,
+  inputs : Array[UInt64],
+) -> Unit {
+  // 每个玩家的输入乘一个互不相同的常数再加进状态，最后整体做一次乘法与
+  // xor-shift：任何一路缺失都会扩散到全部位，玩家之间也不会互相抵消。
+  let mut mixed = self.x
+  let mut i = 0
+  for bits in inputs {
+    let salt = 0x9E3779B97F4A7C15UL >> (i * 8)
+    mixed = mixed + (bits & 7UL) * salt
+    i = i + 1
+  }
+  let m = mixed * 0xBF58476D1CE4E5B9UL + 0x94D049BB133111EBUL
+  self.x = m ^ (m >> 29)
 }
 
 ///|
@@ -51,10 +60,10 @@ pub impl @session.Sim for Scene with fn hash(self) -> UInt64 {
 
 ///|
 /// 显式声明「把 `Sim` 的方法提升为 `Scene` 的方法」，消除 W0079。
-pub extend Scene with @session.Sim::{save, restore, step, hash}
+pub extend Scene with @session.Sim::{save, restore, step_players, hash}
 
 ///|
-/// 确定性的「玩家操作脚本」：每 6 帧换一次按键组合，两个玩家相位错开。
+/// 确定性的「玩家操作脚本」：每 6 帧换一次按键组合，各玩家相位错开。
 ///
 /// 示例不接键盘，是为了让输出可以逐位复现——`moon run` 两次结果必须一样。
 pub fn scripted_input(frame : Int32, player : Int32) -> UInt64 {

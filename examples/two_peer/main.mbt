@@ -64,12 +64,12 @@ fn main {
     while m <= f {
       ab.push(
         @protocol.Message::Input(
-          @protocol.InputFrame::new(m, [@scene.scripted_input(m, 0)]),
+          @protocol.InputFrame::new_from(0, m, [@scene.scripted_input(m, 0)]),
         ),
       )
       ba.push(
         @protocol.Message::Input(
-          @protocol.InputFrame::new(m, [@scene.scripted_input(m, 1)]),
+          @protocol.InputFrame::new_from(1, m, [@scene.scripted_input(m, 1)]),
         ),
       )
       m = m + 1

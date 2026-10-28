@@ -50,10 +50,13 @@ pub fn apply(payload : Bytes, s : @session.Session[Scene]) -> Int32 {
   let mut bad = 0
   for msg in @protocol.decode_batch(payload) {
     match msg {
-      @protocol.Input(x) =>
-        if x.inputs.length() > 0 {
-          s.receive(x.frame, x.inputs[0])
+      @protocol.Input(x) => {
+        let mut i = 0
+        for bits in x.inputs {
+          s.receive_from(x.player + i, x.frame, bits)
+          i = i + 1
         }
+      }
       @protocol.Checksum(c) =>
         match s.hash_at(c.frame) {
           Some(mine) => if mine != c.hash { bad = bad + 1 }
@@ -86,7 +89,11 @@ fn pack(
       // 这种偏差不会被本端回滚洗掉，只能靠两端的确认帧哈希发现。
       input = input ^ 1UL
     }
-    msgs.push(@protocol.Message::Input(@protocol.InputFrame::new(m, [input])))
+    msgs.push(
+      @protocol.Message::Input(
+        @protocol.InputFrame::new_from(player, m, [input]),
+      ),
+    )
     m = m + 1
   }
   msgs.push(

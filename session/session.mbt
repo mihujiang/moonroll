@@ -1,16 +1,20 @@
 ///|
-/// 回滚会话：持有模拟器、双玩家输入环、窗口内快照，负责预测、确认与重放。
+/// 回滚会话：持有模拟器、每个玩家一条输入环、窗口内快照，负责预测、确认与重放。
 ///
 /// 帧号从 1 开始，0 表示初始状态。`frame` 是本地已模拟到的最新帧，
-/// `confirmed` 是双方输入都已到达的最大帧（其之前的帧不会再回滚）。
+/// `confirmed` 是所有玩家输入都已到达的最大帧（其之前的帧不会再回滚）。
 ///
 /// 典型循环（每帧一次）：
 /// 1. 本地推进：`advance(本地输入)`
-/// 2. 把 `player_input(本地玩家, 帧)` 发给对端
-/// 3. 收到对端输入时调用 `receive(帧, 输入)`
+/// 2. 把 `player_input(本地玩家, 帧)` 发给其他玩家
+/// 3. 收到某玩家输入时调用 `receive_from(玩家, 帧, 输入)`
+///
+/// 玩家数在构造时固定，1..`MAX_PLAYERS`（8）人；双人局可以用更短的
+/// `receive(帧, 输入)`，它会自动推断对端是另一个玩家。
 pub struct Session[T] {
   sim : T
   local_id : Int32
+  num_players : Int32
   window : Int32
   mut frame : Int32
   mut confirmed : Int32
@@ -19,8 +23,10 @@ pub struct Session[T] {
   mut replayed : Int64
   /// 单次回滚重放过的最大帧数，用来观察链路最坏情况。
   mut max_depth : Int32
-  p0 : @input.InputRing
-  p1 : @input.InputRing
+  /// 每个玩家一条输入环，按玩家索引排列。
+  rings : Array[@input.InputRing]
+  /// 每帧复用的一张输入表，`inputs[i]` 是第 i 个玩家本帧的输入。
+  buf : Array[UInt64]
   snaps : SnapshotRing
   hashes : HashRing
 }
@@ -30,19 +36,49 @@ pub struct Session[T] {
 pub const DEFAULT_WINDOW : Int32 = 64
 
 ///|
+/// 单局支持的最大玩家数，与协议解码里的上限保持一致。
+pub const MAX_PLAYERS : Int32 = 8
+
+///|
+/// 双人局会话（等价于 `with_players(sim, 2, local_id, DEFAULT_WINDOW)`）。
 pub fn[T : Sim] Session::new(sim : T, local_id : Int32) -> Session[T] {
-  Session::with_window(sim, local_id, DEFAULT_WINDOW)
+  Session::with_players(sim, 2, local_id, DEFAULT_WINDOW)
 }
 
 ///|
-/// `local_id` 是本地玩家索引（0 或 1），`window` 是可回滚的最大帧数。
+/// 双人局会话，指定回滚窗口。
 pub fn[T : Sim] Session::with_window(
   sim : T,
   local_id : Int32,
   window : Int32,
 ) -> Session[T] {
+  Session::with_players(sim, 2, local_id, window)
+}
+
+///|
+/// `num_players` 是这一局固定的人数（1..8），`local_id` 是本地玩家索引，
+/// `window` 是可回滚的最大帧数。
+pub fn[T : Sim] Session::with_players(
+  sim : T,
+  num_players : Int32,
+  local_id : Int32,
+  window : Int32,
+) -> Session[T] {
+  let n = if num_players < 1 {
+    1
+  } else if num_players > MAX_PLAYERS {
+    MAX_PLAYERS
+  } else {
+    num_players
+  }
   let w = if window < 1 { 1 } else { window }
   let cap = w * 2 + 2
+  let rings : Array[@input.InputRing] = []
+  let mut i = 0
+  while i < n {
+    rings.push(@input.InputRing::new(cap))
+    i = i + 1
+  }
   let snaps = SnapshotRing::new(cap)
   let hashes = HashRing::new(cap)
   // 帧 0 是初始状态，必须留下快照，否则第一次回滚没有可恢复点
@@ -50,19 +86,22 @@ pub fn[T : Sim] Session::with_window(
   hashes.set(0, sim.hash())
   {
     sim,
-    local_id: if local_id == 0 {
+    local_id: if local_id < 0 {
       0
+    } else if local_id >= n {
+      n - 1
     } else {
-      1
+      local_id
     },
+    num_players: n,
     window: w,
     frame: 0,
     confirmed: 0,
     rollbacks: 0,
     replayed: 0L,
     max_depth: 0,
-    p0: @input.InputRing::new(cap),
-    p1: @input.InputRing::new(cap),
+    rings,
+    buf: Array::make(n, 0UL),
     snaps,
     hashes,
   }
@@ -71,6 +110,12 @@ pub fn[T : Sim] Session::with_window(
 ///|
 pub fn[T] Session::local_player(self : Session[T]) -> Int32 {
   self.local_id
+}
+
+///|
+/// 这一局的玩家数。
+pub fn[T] Session::player_count(self : Session[T]) -> Int32 {
+  self.num_players
 }
 
 ///|
@@ -118,17 +163,16 @@ pub fn[T] Session::hash_at(self : Session[T], frame : Int32) -> UInt64? {
 }
 
 ///|
-/// 取某个玩家在某一帧的已知输入（未到达或已被覆盖时为 `None`）。
+/// 取某个玩家在某一帧的已知输入（未到达、已被覆盖或玩家索引越界时为 `None`）。
 pub fn[T] Session::player_input(
   self : Session[T],
   player : Int32,
   frame : Int32,
 ) -> UInt64? {
-  if player == 0 {
-    self.p0.get(frame)
-  } else {
-    self.p1.get(frame)
+  if player < 0 || player >= self.num_players {
+    return None
   }
+  self.rings[player].get(frame)
 }
 
 ///|
@@ -138,37 +182,49 @@ pub fn[T : Sim] Session::advance(
   local_input : UInt64,
 ) -> Int32 {
   self.frame = self.frame + 1
-  if self.local_id == 0 {
-    self.p0.set(self.frame, local_input)
-  } else {
-    self.p1.set(self.frame, local_input)
-  }
+  self.rings[self.local_id].set(self.frame, local_input)
   self.simulate(self.frame)
   self.update_confirmed()
   self.frame
 }
 
 ///|
-/// 收到对端在 `frame` 帧的输入。
+/// 双人局的便捷入口：收到「对端」在 `frame` 帧的输入。
 ///
-/// 若该帧已模拟过（`frame <= self.frame`）且尚未确认，就从 `frame - 1`
-/// 的快照恢复并重放 `frame..self.frame`，即发生一次回滚。
+/// 3 人以上请用 `receive_from`——「对端」在 N 人局里没有唯一含义，
+/// 这里会直接忽略，避免调用方悄悄写错。
 pub fn[T : Sim] Session::receive(
   self : Session[T],
   frame : Int32,
   remote_input : UInt64,
 ) -> Unit {
+  if self.num_players != 2 {
+    return
+  }
+  self.receive_from(1 - self.local_id, frame, remote_input)
+}
+
+///|
+/// 收到玩家 `player` 在 `frame` 帧的输入。
+///
+/// 若该帧已模拟过（`frame <= self.frame`）且尚未确认，就从 `frame - 1`
+/// 的快照恢复并重放 `frame..self.frame`，即发生一次回滚。
+pub fn[T : Sim] Session::receive_from(
+  self : Session[T],
+  player : Int32,
+  frame : Int32,
+  remote_input : UInt64,
+) -> Unit {
+  if player < 0 || player >= self.num_players {
+    return
+  }
   if frame < 1 || frame > self.frame + self.window {
     return
   }
   if frame < self.frame - self.window * 2 {
     return
   }
-  if self.local_id == 0 {
-    self.p1.set(frame, remote_input)
-  } else {
-    self.p0.set(frame, remote_input)
-  }
+  self.rings[player].set(frame, remote_input)
   if frame <= self.frame && frame > self.confirmed {
     self.replay_from(frame - 1)
   }
@@ -182,7 +238,7 @@ fn[T] Session::predict(
   player : Int32,
   frame : Int32,
 ) -> UInt64 {
-  let ring = if player == 0 { self.p0 } else { self.p1 }
+  let ring = self.rings[player]
   let floor = if frame - self.window < 0 { 0 } else { frame - self.window }
   let mut f = frame - 1
   while f >= floor {
@@ -196,22 +252,22 @@ fn[T] Session::predict(
 }
 
 ///|
-fn[T] Session::inputs(self : Session[T], frame : Int32) -> (UInt64, UInt64) {
-  let a = match self.p0.get(frame) {
-    Some(v) => v
-    None => self.predict(0, frame)
+/// 把某一帧的完整输入表填进复用缓冲区：已知的就用已知值，缺失的做预测。
+fn[T] Session::fill_inputs(self : Session[T], frame : Int32) -> Unit {
+  let mut i = 0
+  while i < self.num_players {
+    self.buf[i] = match self.rings[i].get(frame) {
+      Some(v) => v
+      None => self.predict(i, frame)
+    }
+    i = i + 1
   }
-  let b = match self.p1.get(frame) {
-    Some(v) => v
-    None => self.predict(1, frame)
-  }
-  (a, b)
 }
 
 ///|
 fn[T : Sim] Session::simulate(self : Session[T], frame : Int32) -> Unit {
-  let (a, b) = self.inputs(frame)
-  self.sim.step(a, b)
+  self.fill_inputs(frame)
+  self.sim.step_players(self.buf)
   self.snaps.set(frame, self.sim.save())
   // 重放时也走这里，历史哈希因此始终对应最后一次模拟的结果。
   self.hashes.set(frame, self.sim.hash())
@@ -242,10 +298,26 @@ fn[T : Sim] Session::replay_from(self : Session[T], base : Int32) -> Unit {
 }
 
 ///|
+/// 确认帧只有在**所有**玩家的输入都到齐时才前进。
 fn[T] Session::update_confirmed(self : Session[T]) -> Unit {
   let mut c = self.confirmed
-  while c < self.frame && self.p0.has(c + 1) && self.p1.has(c + 1) {
-    c = c + 1
+  let mut running = true
+  while running && c < self.frame {
+    let mut i = 0
+    let mut all = true
+    while i < self.num_players {
+      if self.rings[i].has(c + 1) {
+        ()
+      } else {
+        all = false
+      }
+      i = i + 1
+    }
+    if all {
+      c = c + 1
+    } else {
+      running = false
+    }
   }
   self.confirmed = c
 }

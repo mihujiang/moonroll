@@ -5,11 +5,12 @@ fn lcg(state : UInt64) -> UInt64 {
 
 ///|
 test "encoding layout is compact" {
-  // tag(1) + varint frame(1) + varint count(1) + varint bits(1)
+  // tag(1) + varint player(1) + varint frame(1) + varint count(1) + varint bits(1)
   let b = encode(Input(InputFrame::new(1, [0x05UL])))
-  assert_eq(b.length(), 4)
+  assert_eq(b.length(), 5)
   assert_eq(b[0].to_int(), 1)
-  assert_eq(b[3].to_int(), 5)
+  assert_eq(b[1].to_int(), 0)
+  assert_eq(b[4].to_int(), 5)
   // 1000 的 varint 是 2 字节
   assert_eq(encode(Confirm(ConfirmFrame::new(1000))).length(), 3)
   // checksum: tag + varint frame + 8 字节
@@ -111,7 +112,42 @@ test "garbage buffers never panic" {
 
 ///|
 test "oversized player count is rejected" {
-  // 手工构造 count=9 的输入帧
-  let bytes = Bytes::makei(3, fn(i) { [1, 1, 9][i].to_byte() })
+  // 手工构造 count=9 的输入帧：tag=1, player=0, frame=1, count=9
+  let bytes = Bytes::makei(4, fn(i) { [1, 0, 1, 9][i].to_byte() })
   assert_true(decode(bytes) is None)
+}
+
+///|
+test "oversized player index is rejected" {
+  // player=9 超出 8 人上限
+  let bytes = Bytes::makei(4, fn(i) { [1, 9, 1, 1][i].to_byte() })
+  assert_true(decode(bytes) is None)
+}
+
+///|
+test "player index roundtrip over 2000 random frames" {
+  let mut seed = 2026UL
+  let mut i = 0
+  while i < 2000 {
+    seed = lcg(seed)
+    let frame = (seed & 0xFFFFUL).to_int()
+    seed = lcg(seed)
+    let count = (seed % 3UL).to_int() + 1
+    seed = lcg(seed)
+    // player + count 不能越过 8 人上限
+    let player = (seed % (9UL - count.to_uint64())).to_int()
+    let inputs : Array[UInt64] = []
+    let mut j = 0
+    while j < count {
+      seed = lcg(seed)
+      inputs.push(seed & 0xFFUL)
+      j = j + 1
+    }
+    let msg = Input(InputFrame::new_from(player, frame, inputs))
+    match decode(encode(msg)) {
+      Some(m) => assert_true(m == msg)
+      None => assert_true(false)
+    }
+    i = i + 1
+  }
 }
