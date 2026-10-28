@@ -76,6 +76,10 @@
              color: var(--dim); font-variant-numeric: tabular-nums; }
       .hud b { color: var(--text); font-weight: 550; }
       .note { display: flex; gap: 14px; flex-wrap: wrap; color: var(--dim); font-size: 11.5px; }
+      .foot { display: flex; gap: 10px; flex-wrap: wrap; color: var(--dim); font-size: 11.5px;
+              border-top: 1px solid var(--line); padding-top: 10px; }
+      .foot a { color: var(--p0); text-decoration: none; }
+      .foot a:hover { text-decoration: underline; }
       kbd { font: inherit; font-size: 11px; padding: 1px 5px; border: 1px solid var(--line);
             border-bottom-width: 2px; border-radius: 5px;
             background: rgba(148, 163, 184, 0.1); color: var(--text); }
@@ -159,6 +163,13 @@
           <span><b style="color: var(--p1)">P1</b> <kbd>←</kbd><kbd>→</kbd> 移动 <kbd>↑</kbd> 跳</span>
           <span><kbd>空格</kbd> 暂停 <kbd>R</kbd> 重置</span>
           <span>同色虚线框 = 对端同一物体的位置，贴合即同步</span>
+        </div>
+
+        <div class="foot">
+          <span>moonroll 0.9.0</span>
+          <a href="https://github.com/mihujiang/moonroll">源码与文档</a>
+          <a href="https://mooncakes.io/docs/weopqrst/moonroll">mooncakes</a>
+          <span>wasm-gc · 零外部依赖</span>
         </div>
       </div>
     </div>

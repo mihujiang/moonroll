@@ -33,6 +33,11 @@ const name = /^name\s*=\s*"([^"]+)"/m.exec(mod)?.[1] ?? fail("moon.mod 里没有
 const version = /^version\s*=\s*"([^"]+)"/m.exec(mod)?.[1] ?? fail("moon.mod 里没有 version");
 console.log(`模块: ${name}\n版本: ${version}\n`);
 
+// mooncakes 现阶段只接受 0.x.y，发 1.0.0 会被服务端 403 拒掉
+if (!/^0\.\d+\.\d+$/.test(version)) {
+  fail("mooncakes 目前只接受 0.x.y 形式的版本号（服务端会直接 403），先改 moon.mod");
+}
+
 // 1) 本地已经打过 tag 说明这个版本可能发过了
 const tags = spawnSync("git", ["tag", "-l", `v${version}`], { cwd: root, encoding: "utf8" });
 if (tags.stdout.trim()) console.log(`! 本地已有 tag v${version}，确认这不是重复发布\n`);

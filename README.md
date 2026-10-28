@@ -5,10 +5,14 @@
 MoonBit 生态里"把两个玩家连起来还不漂移"这一层是空白。
 `moonroll` 补的就是这一层：不绑定任何引擎的确定性回滚同步（rollback netcode）。
 
-**状态：V1.0（可发布）**。定点数、状态哈希、每个玩家一条输入环、
+**状态：V1.0（功能完备）**。定点数、状态哈希、每个玩家一条输入环、
 预测 / 确认 / 回滚重放、紧凑字节协议（含区间帧、变化掩码与全量状态帧）、确定性延迟 / 抖动 / 丢包 / 乱序模拟器，
 一个把两个 `moonphys` 物理世界连起来的可视化演示，以及七个 `moon run` 就能跑的示例
 （含四人对局重放成本对比、掉线前后确认帧走势对比、五种发包策略的带宽对比、分叉后的全量重同步）。
+
+已发布到 mooncakes：[**`weopqrst/moonroll@0.9.0`**](https://mooncakes.io/docs/weopqrst/moonroll)。
+mooncakes 现阶段只接受 `0.x.y` 形式的版本号（发 `1.0.0` 会被服务端以
+`403 ... the major version must be '0'` 拒掉），所以模块版本是 `0.9.0`，功能上就是这里说的 V1.0。
 
 **在线演示：[mihujiang.github.io/moonroll](https://mihujiang.github.io/moonroll/)** —— 浏览器里直接跑，
 拖延迟 / 抖动 / 丢包 / 乱序滑块，看两个物理世界回滚重放后重新贴合。
@@ -481,6 +485,10 @@ node tools/publish.mjs            # 打包 + moon publish
 `tools/publish.mjs` 先拿 `moon.mod` 的版本去 registry 上比：比当前最新版本旧就直接拒绝，
 免得白跑一趟（mooncakes 的版本号不能复用）；然后 `moon package` 确认模块自洽，
 最后用同一份内容上传。`--dry-run` 只做到打包为止。
+
+mooncakes 现阶段只接受 `0.x.y` 的版本号（发 `1.0.0` 会拿到
+`403 ... the major version must be '0'`），脚本会在本地就把这种版本号拦下来。
+所以 roadmap 上的 V1.0 对应模块版本 `0.9.0`。
 
 ## Roadmap
 
