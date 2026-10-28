@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install MoonBit
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+
+      - name: moon version
+        run: moon version && moonc version
+
+      - name: check
+        run: moon check --deny-warn
+
+      - name: fmt
+        run: moon fmt --check
+
+      - name: test wasm-gc
+        run: moon test --target wasm-gc
+
+      - name: test js
+        run: moon test --target js
+
+      - name: build native
+        run: moon build --target native

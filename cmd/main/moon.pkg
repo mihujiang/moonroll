@@ -1,0 +1,10 @@
+import {
+  "weopqrst/moonroll",
+  "weopqrst/moonroll/fixed",
+  "weopqrst/moonroll/digest",
+  "weopqrst/moonroll/input",
+}
+
+options(
+  "is-main": true,
+)
