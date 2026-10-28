@@ -34,6 +34,11 @@ pub struct Session[T] {
   /// 每个玩家是否在线。掉线的玩家保留槽位（模拟器仍然需要 N 路输入），
   /// 但不再参与确认帧的推进。
   active : Array[Bool]
+  /// 每个对端最近一次**声明的确认帧**（来自它的 `Confirm` 包）。
+  ///
+  /// 只用于算「重新发送从哪里开始」：对方已经确认过的帧不必再发。
+  /// 丢了也不会错，只会多发几帧。
+  heard : Array[Int32]
   /// 每帧复用的一张输入表，`inputs[i]` 是第 i 个玩家本帧的输入。
   buf : Array[UInt64]
   snaps : SnapshotRing
@@ -90,10 +95,12 @@ pub fn[T : Sim] Session::with_players(
   }
   let cont : Array[Int32] = []
   let active : Array[Bool] = []
+  let heard : Array[Int32] = []
   let mut k = 0
   while k < n {
     cont.push(0)
     active.push(true)
+    heard.push(0)
     k = k + 1
   }
   let snaps = SnapshotRing::new(cap)
@@ -120,6 +127,7 @@ pub fn[T : Sim] Session::with_players(
     rings,
     cont,
     active,
+    heard,
     buf: Array::make(n, 0UL),
     snaps,
     hashes,
@@ -283,6 +291,45 @@ pub fn[T : Sim] Session::receive(
     return
   }
   self.receive_from(1 - self.local_id, frame, remote_input)
+}
+
+///|
+/// 收到对端 `player` 的 `Confirm` 包，记下它已确认到 `frame`。
+///
+/// 这个水位只用来算「重发从哪一帧开始」：对方已经确认过的帧不用再发。
+/// 记录本身不影响确认帧的推进（那由 `receive_from` 里的连续指针负责），
+/// 所以迟到的、重复的、乱序的 `Confirm` 都是安全的。
+///
+/// 帧号会被钳到本地已模拟帧：对端不可能确认我们还没算出来的帧。
+pub fn[T] Session::receive_confirm(
+  self : Session[T],
+  player : Int32,
+  frame : Int32,
+) -> Unit {
+  if player < 0 || player >= self.num_players {
+    return
+  }
+  if player == self.local_id {
+    return
+  }
+  let f = if frame > self.frame { self.frame } else { frame }
+  if f <= self.heard[player] {
+    return
+  }
+  self.heard[player] = f
+}
+
+///|
+/// 对端 `player` 最近声明的确认帧（从未收到过 `Confirm` 时为 0）。
+///
+/// 发送端可以据此把「重发最近 8 帧」换成「重发对方还没确认的那一段」：
+/// 链路正常时这段只有延迟那么大，丢包时水位停住、区间自动变长，
+/// 于是被丢的输入仍然会被补上。
+pub fn[T] Session::peer_confirmed(self : Session[T], player : Int32) -> Int32 {
+  if player < 0 || player >= self.num_players {
+    return 0
+  }
+  self.heard[player]
 }
 
 ///|

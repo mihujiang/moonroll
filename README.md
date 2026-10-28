@@ -5,10 +5,10 @@
 MoonBit 生态里"把两个玩家连起来还不漂移"这一层是空白。
 `moonroll` 补的就是这一层：不绑定任何引擎的确定性回滚同步（rollback netcode）。
 
-**状态：V0.7（1..8 人同局 + 掉线语义）**。定点数、状态哈希、每个玩家一条输入环、
-预测 / 确认 / 回滚重放、紧凑字节协议、确定性延迟 / 抖动 / 丢包 / 乱序模拟器，
-一个把两个 `moonphys` 物理世界连起来的可视化演示，以及五个 `moon run` 就能跑的示例
-（含四人对局重放成本对比、掉线前后确认帧走势对比）。
+**状态：V0.8（带宽）**。定点数、状态哈希、每个玩家一条输入环、
+预测 / 确认 / 回滚重放、紧凑字节协议（含区间帧与变化掩码）、确定性延迟 / 抖动 / 丢包 / 乱序模拟器，
+一个把两个 `moonphys` 物理世界连起来的可视化演示，以及六个 `moon run` 就能跑的示例
+（含四人对局重放成本对比、掉线前后确认帧走势对比、六种发包策略的带宽对比）。
 `moon check --deny-warn` 与 `moon fmt --check` 在 CI 里全绿。
 
 设计取舍见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
@@ -89,6 +89,19 @@ peer.online_count()                            // 3
 「窗口内最近一次已知值、否则 0」——所有对等体用同一套确定性规则，所以不会分叉。
 重连用 `set_player_active(who, true)`，确认帧不会因此回退。
 
+带宽上能省的地方在「重发多少帧」和「怎么表示这段帧」。收到对端的确认包时记一下水位，
+就能把「固定重发 16 帧」换成「只发对方还没确认的那一段」：
+
+```moonbit
+peer.receive_confirm(who, msg.frame)   // 收到 who 的 Confirm 包
+peer.peer_confirmed(who)               // 它已确认到哪一帧（从没收到过就是 0）
+
+// 于是重发区间从 peer.peer_confirmed(who) + 1 开始，而不是盲发最近 16 帧
+```
+
+水位只会前进，迟到/重复的确认包不会把重发区间拽回去；丢包时水位停住，区间自动变长，
+被丢的输入照样补上。
+
 底层三个包可单独使用：
 
 ```moonbit
@@ -114,9 +127,14 @@ ring.set(frame, 0b101UL)
 | Confirm | `[0x02][varint frame]` |
 | Checksum | `[0x03][varint frame][8 bytes hash]` |
 | Active | `[0x04][varint player][varint active]`（1 上线 / 0 掉线） |
+| InputSpan | `[0x05][varint player][varint start][varint count][varint mask][varint bits] × popcount(mask)` |
 
 `Input` 里的 `inputs[i]` 是玩家 `player + i` 的输入：单人单帧就是 `player=自己, count=1`，
 `player + count` 不能越过 8 人上限。
+
+`InputSpan` 是同一个玩家的**一段连续帧**：`count` 是帧数（1..64），`mask` 的第 i 位
+表示 `start + i` 帧的输入是否随包发出，没置位的帧沿用包里前一个值。重发冗余输入时
+一个人一帧一条 `Input` 是 4 字节，一段 16 帧、按键只变三次时 `InputSpan` 只要 9 字节。
 
 ```moonbit
 let wire = @protocol.encode(@protocol.Message::Input(
@@ -165,6 +183,9 @@ moon run examples/four_peer
 
 # 5) 掉线：3 号拔网线，对比「不宣布掉线」与「房主宣布」两种确认帧走势
 moon run examples/drop_out
+
+# 6) 带宽：同样一局，五种发包策略的字节数对比（区间帧 / 掩码 / 自适应 / 校验和降频）
+moon run examples/bandwidth
 ```
 
 `latency_chart` 的真实输出（300 帧，60fps）：
@@ -215,6 +236,22 @@ moon run examples/drop_out
 宣布之后确认帧立刻补到当前帧，重放量掉到约四分之一。掉线者自己停在 200——他收到的
 是一份不同的世界，这正是「掉线」的语义。
 
+`bandwidth` 的真实输出（4 人全互联，600 帧，3 帧延迟 + 1 帧抖动 + 5% 丢包 + 10% 乱序）：
+
+| 策略 | 发送字节 | 相对第一种 | 平均字节/包 | 平均携带帧数 |
+| --- | --- | --- | --- | --- |
+| 每帧一条 Input，固定 16 帧 | 761088 | 100% | 105 | 15 |
+| 一条 InputSpan，固定 16 帧 | 268860 | 35% | 37 | 15 |
+| InputSpan + 变化掩码 | 174696 | 22% | 24 | 15 |
+| InputSpan + 掩码 + 对端水位 | 161007 | 21% | 22 | 9 |
+| 以上 + 校验和每 8 帧 | 93099 | 12% | 12 | 9 |
+
+五种策略的确认帧都是 600/600/600/600，一致 = yes，回滚与重放次数逐项相等
+（8895 / 42082）——省下来的只有字节。105 字节/包压到 12 字节/包，同一局快了 **8 倍**。
+
+延迟比冗余还差的时候（10 帧延迟 + 25% 丢包），前四种的区间都会被对端水位顶到 15~16 帧，
+自适应策略自动退回保守值，确认帧照样追平到 600：**冗余可以配大，代价由链路自己决定**。
+
 `two_peer` 的循环是手写的，可以当接入模板读：每帧打包「最近 8 帧输入 + 确认帧 +
 校验和帧」，接收端解码后逐条投递。`desync_demo` 里那处故障注入用的是「本地执行 A、
 发出去的是 B」——不能直接去改内存里的状态，回滚会从快照恢复并把它洗掉。
@@ -224,7 +261,8 @@ moon run examples/drop_out
 `adapters/phys` 把 `moonphys` 的 `World` 包成 `Sim`：`save` / `restore` 走
 `World::save_state` / `World::load_state`（含位姿、速度、暖启动冲量与世界时钟），
 `hash` 走 `state_hash`。`demo/` 里跑一局真实对局：两个独立物理世界、两个 `Session`、
-两条带延迟 / 抖动 / 丢包 / 乱序的模拟链路，每帧互发最近 8 帧输入。
+两条带延迟 / 抖动 / 丢包 / 乱序的模拟链路，每帧互发最近 8 帧输入（这里刻意用最朴素的
+逐帧 `Input`，好让 `docs/` 里的字节曲线和 `bandwidth` 示例的优化结果形成对照）。
 
 ```bash
 # 构建 wasm 产物到 docs/engine.wasm（产物已提交，改代码后重跑）
@@ -274,8 +312,8 @@ python -m http.server --directory docs 8123
 | `weopqrst/moonroll/fixed` | Q16.16 定点数（`+ - * /`、开方、lerp、clamp） | V0.1 |
 | `weopqrst/moonroll/digest` | FNV-1a 64 状态哈希 | V0.1 |
 | `weopqrst/moonroll/input` | 帧号 -> 输入位图的环形缓冲 | V0.1 |
-| `weopqrst/moonroll/session` | `Sim` 协议 + 预测 / 确认 / 回滚重放 / 历史哈希 + 1..8 人会话 + 掉线语义 | V0.2 |
-| `weopqrst/moonroll/protocol` | 输入帧（带玩家索引）、确认帧、校验和帧、在线状态帧的字节编解码 | V0.3 |
+| `weopqrst/moonroll/session` | `Sim` 协议 + 预测 / 确认 / 回滚重放 / 历史哈希 + 1..8 人会话 + 掉线语义 + 对端水位 | V0.2 |
+| `weopqrst/moonroll/protocol` | 输入帧、区间帧、确认帧、校验和帧、在线状态帧的字节编解码 | V0.3 |
 | `weopqrst/moonroll/sim_net` | 延迟 / 抖动 / 丢包 / 乱序模拟器 | V0.3 |
 | `weopqrst/moonroll/adapters/phys` | `moonphys` 参考适配层（`PhysSim`） | V0.4 |
 | `weopqrst/moonroll/demo` | wasm-gc 演示引擎（`mr_*` 数值导出） | V0.4 |
@@ -285,6 +323,7 @@ python -m http.server --directory docs 8123
 | `weopqrst/moonroll/examples/desync_demo` | 分叉检测自证 | V0.5 |
 | `weopqrst/moonroll/examples/four_peer` | 四人对局 + 2/4 人重放成本对比 | V0.6 |
 | `weopqrst/moonroll/examples/drop_out` | 掉线前后确认帧走势对比 | V0.7 |
+| `weopqrst/moonroll/examples/bandwidth` | 五种发包策略的字节数对比 | V0.8 |
 
 ## 验证
 
@@ -296,10 +335,10 @@ moon test --target js
 node tools/check-demo.mjs  # 1800 帧 wasm 自检
 ```
 
-CI（`.github/workflows/ci.yml`）跑的就是这一串，外加五个示例的冒烟和
+CI（`.github/workflows/ci.yml`）跑的就是这一串，外加六个示例的冒烟和
 「提交的 `docs/engine.wasm` 必须与重新构建的产物逐字节一致」。
 
-143 个测试，两个后端全绿。核心断言：
+153 个测试，两个后端全绿。核心断言：
 
 - 定点数与 `Double` 对拍误差不超过 4 个 LSB；
 - FNV-1a 64 对 `"hello"` 命中标准向量 `0xa430d84680aabd0b`；
@@ -327,6 +366,11 @@ CI（`.github/workflows/ci.yml`）跑的就是这一串，外加五个示例的�
 - **重连把连续指针抬到当前确认帧，确认帧不回退，重连者补齐输入后继续前进；**
 - **本地玩家不能被标成掉线，最后一名在线玩家不能被踢，越界索引返回 `false`；**
 - **掉线示例：不宣布时确认帧停在 200，宣布后余下三人推到 480，重放量降到约四分之一。**
+- **区间帧：16 帧重发从 16 条 `Input`（64 字节）压到 1 条 9 字节的 `InputSpan`，展开逐帧相等；**
+- **掩码：同一段输入只发变化的值，全同的 4 帧只发 1 个值；首帧未置位、`count` 为 0/超 64、
+  `start` 为 0、`player` 越界、掩码越出 `count`、值不足一律返回 `None`；**
+- **带宽示例：五种策略喂同一局，回滚与重放次数逐项相等，字节数单调下降；
+  25% 丢包 + 10 帧延迟下确认帧仍追平到 600；同参数两次运行字节数完全相同。**
 
 ## Roadmap
 
@@ -336,8 +380,9 @@ CI（`.github/workflows/ci.yml`）跑的就是这一串，外加五个示例的�
 - **V0.4** 接入 `moonphys` 的 wasm-gc 可视化演示（双世界对照、回滚计数、延迟滑块）（已完成）
 - **V0.5** 三个可运行示例 + 零警告 CI（`--deny-warn`、`fmt --check`、demo 产物校验）+ 架构文档（已完成）
 - **V0.6** 1..8 人同局：每玩家一条输入环、`step_players` 接入、协议带玩家索引、四人对局示例（已完成）
-- **V0.7** 掉线语义：在线集合、确认帧只等在线玩家、重连不回退、协议 `Active` 帧、掉线示例（当前）
-- **V0.8** 带宽：输入帧增量打包（只发变化帧 + 序号区间）、多帧合并发送
+- **V0.7** 掉线语义：在线集合、确认帧只等在线玩家、重连不回退、协议 `Active` 帧、掉线示例（已完成）
+- **V0.8** 带宽：`InputSpan` 区间帧 + 变化掩码、对端水位自适应重发、校验和降频、带宽示例（当前）
+- **V0.9** 分叉恢复：检测到失配后从快照全量重同步，而不是只报帧号
 - **V1.0** GitHub Pages 在线演示、验收脚本、mooncakes 发布
 
 ## 明确不做

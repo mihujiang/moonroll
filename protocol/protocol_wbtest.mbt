@@ -184,3 +184,105 @@ test "player index roundtrip over 2000 random frames" {
     i = i + 1
   }
 }
+
+///|
+test "input span folds repeated frames" {
+  // 8 帧里输入只变三次：值 -> 值 ×3 -> 值 -> 值 -> 值 -> 值
+  let inputs : Array[UInt64] = [3UL, 3UL, 3UL, 5UL, 5UL, 5UL, 5UL, 1UL]
+  let span = InputSpanFrame::of(2, 100, inputs)
+  assert_eq(span.count, 8)
+  assert_eq(span.values.length(), 3)
+  assert_eq(span.mask, 0b10001001UL)
+  let back = span.expand()
+  assert_eq(back.length(), 8)
+  let mut i = 0
+  while i < 8 {
+    assert_eq(back[i], inputs[i])
+    i = i + 1
+  }
+  // 编码：tag + player + start + count + mask(2) + 3 个值 = 9 字节；
+  // 逐帧发 8 条 Input 是 8 × 4 = 32 字节。
+  let bytes = encode_batch([Span(span)])
+  assert_eq(bytes.length(), 9)
+}
+
+///|
+test "input span of a constant run is one value" {
+  let inputs : Array[UInt64] = [7UL, 7UL, 7UL, 7UL]
+  let span = InputSpanFrame::of(0, 1, inputs)
+  assert_eq(span.mask, 1UL)
+  assert_eq(span.values.length(), 1)
+  assert_eq(encode_batch([Span(span)]).length(), 6)
+  // raw 不折叠：同一个区间的 4 个值全给
+  let raw = InputSpanFrame::raw(0, 1, inputs)
+  assert_eq(raw.values.length(), 4)
+  assert_eq(encode_batch([Span(raw)]).length(), 9)
+}
+
+///|
+test "input span roundtrip over 500 random runs" {
+  let mut seed = 20240UL
+  let mut i = 0
+  while i < 500 {
+    seed = lcg(seed)
+    let count = (seed % 16UL).to_int() + 1
+    seed = lcg(seed)
+    let start = (seed & 0x3FFUL).to_int() + 1
+    seed = lcg(seed)
+    let player = (seed % 8UL).to_int()
+    // 用很小的取值域制造大量重复帧
+    let inputs : Array[UInt64] = []
+    let mut j = 0
+    while j < count {
+      seed = lcg(seed)
+      inputs.push(seed % 5UL)
+      j = j + 1
+    }
+    let span = InputSpanFrame::of(player, start, inputs)
+    let msg = Span(span)
+    match decode(encode(msg)) {
+      Some(m) => {
+        assert_true(m == msg)
+        match m {
+          Span(s) => {
+            let expanded = s.expand()
+            assert_eq(expanded.length(), count)
+            let mut k = 0
+            while k < count {
+              assert_eq(expanded[k], inputs[k])
+              k = k + 1
+            }
+          }
+          _ => assert_true(false)
+        }
+      }
+      None => assert_true(false)
+    }
+    i = i + 1
+  }
+}
+
+///|
+test "malformed input spans are rejected" {
+  // mask 的首位没置位：这段没有起点值
+  let no_first = Bytes::makei(6, fn(i) { [5, 1, 10, 2, 2, 7][i].to_byte() })
+  assert_true(decode(no_first) is None)
+  // count = 0
+  let zero = Bytes::makei(5, fn(i) { [5, 1, 10, 0, 1][i].to_byte() })
+  assert_true(decode(zero) is None)
+  // count = 65 超过掩码位数
+  let too_many = Bytes::makei(5, fn(i) { [5, 1, 10, 65, 1][i].to_byte() })
+  assert_true(decode(too_many) is None)
+  // start = 0（帧号从 1 开始）
+  let zero_start = Bytes::makei(5, fn(i) { [5, 1, 0, 2, 3][i].to_byte() })
+  assert_true(decode(zero_start) is None)
+  // player = 8
+  let bad_player = Bytes::makei(5, fn(i) { [5, 8, 10, 2, 3][i].to_byte() })
+  assert_true(decode(bad_player) is None)
+  // mask 越出 count：count=2 但有第 3 位
+  let wide = Bytes::makei(5, fn(i) { [5, 1, 10, 2, 5][i].to_byte() })
+  assert_true(decode(wide) is None)
+  // 值不够
+  let short = Bytes::makei(5, fn(i) { [5, 1, 10, 2, 3][i].to_byte() })
+  assert_true(decode(short) is None)
+}

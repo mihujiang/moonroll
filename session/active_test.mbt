@@ -202,3 +202,34 @@ test "online set guards" {
   assert_true(!solo[0].set_player_active(0, false))
   assert_eq(solo[0].online_count(), 1)
 }
+
+///|
+/// 对端水位只前进：它决定「重发从哪一帧开始」，退回去只会白发票。
+test "peer confirm watermark only moves forward" {
+  let n : Int32 = 3
+  let s = make_pack(n, 16)
+  let mut f = 0
+  while f < 5 {
+    f = f + 1
+    ignore(s[0].advance(pack_input(f, 0)))
+  }
+  assert_eq(s[0].peer_confirmed(1), 0)
+  s[0].receive_confirm(1, 3)
+  assert_eq(s[0].peer_confirmed(1), 3)
+  s[0].receive_confirm(1, 4)
+  assert_eq(s[0].peer_confirmed(1), 4)
+  // 迟到的旧包不能把水位拽回去
+  s[0].receive_confirm(1, 2)
+  assert_eq(s[0].peer_confirmed(1), 4)
+  // 对端不可能确认我们还没算出来的帧
+  s[0].receive_confirm(1, 999)
+  assert_eq(s[0].peer_confirmed(1), s[0].frame())
+  // 自己不是「对端」
+  s[0].receive_confirm(0, 2)
+  assert_eq(s[0].peer_confirmed(0), 0)
+  // 越界不炸
+  s[0].receive_confirm(9, 2)
+  s[0].receive_confirm(-1, 2)
+  assert_eq(s[0].peer_confirmed(9), 0)
+  assert_eq(s[0].peer_confirmed(-1), 0)
+}
