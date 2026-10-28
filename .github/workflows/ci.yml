@@ -40,7 +40,13 @@ jobs:
           printf '%s\n' "$out"
 
       - name: check
-        run: moon check --deny-warn
+        run: |
+          if ! out=$(moon check --deny-warn 2>&1); then
+            printf '%s\n' "$out"
+            msg=$(printf '%s' "$out" | tr -d '%' | tr '\n' '|' | head -c 3000)
+            echo "::error::moon check failed: $msg"
+            exit 1
+          fi
 
       - name: fmt
         run: moon fmt --check
@@ -86,7 +92,13 @@ jobs:
       - name: build demo wasm
         run: |
           export PATH="$HOME/.moon/bin:$PATH"
-          moon build --target wasm-gc --release
+          if ! out=$(moon build --target wasm-gc --release 2>&1); then
+            printf '%s\n' "$out"
+            msg=$(printf '%s' "$out" | tr -d '%' | tr '\n' '|' | head -c 3000)
+            echo "::error::moon build failed: $msg"
+            exit 1
+          fi
+          printf '%s\n' "$out"
           wasm=$(find _build -path '*demo/demo.wasm' | head -n 1)
           test -n "$wasm"
           cp "$wasm" docs/engine.wasm
