@@ -94,3 +94,19 @@ if (dryRun) {
 const pub = spawnSync(moonBin(), ["publish"], { cwd: root, stdio: "inherit" });
 if (pub.status !== 0) fail("moon publish 失败（多半是没登录或 token 过期，先 moon login）");
 console.log(`\n已发布 ${name}@${version}`);
+
+// 5) 确认包真的能下载。
+// `Server status: 200` 只表示索引写入成功，包文件走的是另一条链路；曾经出现过
+// 索引里有版本和 checksum、CDN 上 zip 却 404 的情况，用户 `moon add` 直接失败。
+const zipUrl = `https://d15l9c1mnzh3r.cloudfront.net/user/${name}/${version}.zip`;
+const devNull = process.platform === "win32" ? "NUL" : "/dev/null";
+const probe = spawnSync("curl", ["-s", "-o", devNull, "-w", "%{http_code}", "-I", zipUrl], { encoding: "utf8" });
+const code = (probe.stdout ?? "").trim();
+if (code === "200") {
+  console.log(`包可下载: ${zipUrl}`);
+} else {
+  console.warn(
+    `\n! 包文件暂时取不到（HTTP ${code || "无响应"}）：${zipUrl}\n` +
+      `  索引已写入，但 CDN 上没有这个 zip。等平台恢复后重发一个新的 patch 版本。`,
+  );
+}

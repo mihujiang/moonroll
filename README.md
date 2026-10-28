@@ -10,9 +10,14 @@ MoonBit 生态里"把两个玩家连起来还不漂移"这一层是空白。
 一个把两个 `moonphys` 物理世界连起来的可视化演示，以及七个 `moon run` 就能跑的示例
 （含四人对局重放成本对比、掉线前后确认帧走势对比、五种发包策略的带宽对比、分叉后的全量重同步）。
 
-已发布到 mooncakes：[**`weopqrst/moonroll@0.9.0`**](https://mooncakes.io/docs/weopqrst/moonroll)。
+已发布到 mooncakes：[**`weopqrst/moonroll@0.9.4`**](https://mooncakes.io/docs/weopqrst/moonroll)。
 mooncakes 现阶段只接受 `0.x.y` 形式的版本号（发 `1.0.0` 会被服务端以
-`403 ... the major version must be '0'` 拒掉），所以模块版本是 `0.9.0`，功能上就是这里说的 V1.0。
+`403 ... the major version must be '0'` 拒掉），所以模块版本是 `0.9.4`，功能上就是这里说的 V1.0。
+
+> 2026-10-28：mooncakes 那边新上传的包文件暂时取不到 —— 索引里有版本号和 checksum，
+> 但 `.../user/weopqrst/moonroll/0.9.4.zip` 返回 404，`moon add` 会失败。
+> 同一账号早先发布的版本（以及 `weopqrst/moonphys`）都正常，问题在平台侧，与本仓库内容无关。
+> 恢复后重发一个 patch 版本即可。
 
 **在线演示：[mihujiang.github.io/moonroll](https://mihujiang.github.io/moonroll/)** —— 浏览器里直接跑，
 拖延迟 / 抖动 / 丢包 / 乱序滑块，看两个物理世界回滚重放后重新贴合。
@@ -488,7 +493,17 @@ node tools/publish.mjs            # 打包 + moon publish
 
 mooncakes 现阶段只接受 `0.x.y` 的版本号（发 `1.0.0` 会拿到
 `403 ... the major version must be '0'`），脚本会在本地就把这种版本号拦下来。
-所以 roadmap 上的 V1.0 对应模块版本 `0.9.0`。
+所以 roadmap 上的 V1.0 对应模块版本 `0.9.x`。
+
+发布后记得验证包真的能下载，而不只是 `Server status: 200`：
+
+```bash
+moon update      # 刷新 registry 索引
+moon add weopqrst/moonroll
+```
+
+`moon publish` 打印 200 只代表索引写入成功，包文件是另一条链路（CDN 上的
+`user/<owner>/<name>/<version>.zip`）。
 
 ## Roadmap
 

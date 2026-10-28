@@ -3,7 +3,7 @@
 
 name = "weopqrst/moonroll"
 
-version = "0.9.0"
+version = "0.9.4"
 
 readme = "README.mbt.md"
 
