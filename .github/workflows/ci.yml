@@ -59,10 +59,12 @@ jobs:
             exit 1
           fi
 
+      # 不带路径时 moon fmt 会格式化 workspace 的所有成员（连带兄弟仓库 moonphys，
+      # 它的源码还没跟上本仓库的 fmt 规则），所以显式只给本仓库的文件。
       - name: fmt
         working-directory: moonroll
         run: |
-          if ! out=$(moon fmt --check 2>&1); then
+          if ! out=$(moon fmt --check $(git ls-files '*.mbt') 2>&1); then
             printf '%s\n' "$out"
             msg=$(printf '%s' "$out" | tr -d '%' | tr '\n' '|' | head -c 3000)
             echo "::error::moon fmt failed: $msg"
@@ -132,20 +134,20 @@ jobs:
           printf '%s\n' "$out"
           wasm=$(find ../_build -path '*demo/demo.wasm' | head -n 1)
           test -n "$wasm"
-          cp "$wasm" docs/engine.wasm
+          echo "built wasm: $wasm ($(stat -c%s "$wasm")B)"
 
       # 1800 帧、200ms 延迟 + 50ms 抖动，要求 desync=0
       - name: selftest
         working-directory: moonroll
         run: node tools/check-demo.mjs
 
-      # 产物必须是重新构建后逐字节一致的，避免提交过期的 wasm
+      # 产物必须是重新构建后逐字节一致的，避免提交过期的 wasm。
+      # 比内容而不是比 git diff：cp/build 产物的可执行位会让 git 认为文件变了。
       - name: wasm artifact is up to date
         working-directory: moonroll
         run: |
-          if ! git diff --quiet -- docs/engine.wasm; then
-            built=$(find ../_build -path '*demo/demo.wasm' | head -n 1)
-            echo "::error::rebuilt wasm differs: shipped=$(stat -c%s docs/engine.wasm)B/$(sha256sum docs/engine.wasm | cut -c1-16) built=$(stat -c%s "$built")B/$(sha256sum "$built" | cut -c1-16)"
-            git diff --stat -- docs/engine.wasm
+          built=$(find ../_build -path '*demo/demo.wasm' | head -n 1)
+          if ! cmp -s docs/engine.wasm "$built"; then
+            echo "::error::docs/engine.wasm 与重建产物不一致: shipped=$(stat -c%s docs/engine.wasm)B/$(sha256sum docs/engine.wasm | cut -c1-16) built=$(stat -c%s "$built")B/$(sha256sum "$built" | cut -c1-16)"
             exit 1
           fi
