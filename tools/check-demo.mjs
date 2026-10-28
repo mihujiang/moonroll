@@ -5,12 +5,14 @@
 // promises. Exit code 0 means both peers converged with zero divergence.
 //
 //   node tools/check-demo.mjs
+//   node tools/check-demo.mjs path/to/other.wasm
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const wasmPath = join(here, "..", "docs", "engine.wasm");
+// 默认校验提交进仓库的那份；CI 还会用刚构建出来的产物再跑一遍
+const wasmPath = process.argv[2] ?? join(here, "..", "docs", "engine.wasm");
 
 const bytes = await readFile(wasmPath);
 const { instance } = await WebAssembly.instantiate(bytes, {});

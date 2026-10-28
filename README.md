@@ -400,8 +400,14 @@ moon test --target js
 node tools/check-demo.mjs  # 1800 帧 wasm 自检
 ```
 
-CI（`.github/workflows/ci.yml`）跑的就是这一串，外加七个示例的冒烟和
-「提交的 `docs/engine.wasm` 必须与重新构建的产物逐字节一致」。
+CI（`.github/workflows/ci.yml`）跑的就是这一串，外加七个示例的冒烟，以及
+「提交的 `docs/engine.wasm` 和刚构建出来的 wasm 各跑一遍无头自检」。
+同一份源码在不同 moonc 版本 / 不同宿主上产出的字节并不相同，所以 CI 不比字节，
+只保证两份都能跑通（`tools/build-demo.ps1` 负责在本地重建并覆盖提交的那份）。
+
+`moon.mod` 依赖 `weopqrst/moonphys`（demo 与 `adapters/phys` 用的物理引擎，还没发布到
+mooncakes registry），所以单独 clone 本仓库是构建不了的：要在父目录放一个 `moon.work`，
+把 `moonroll` 和 `moonphys` 都列为成员。CI 也是 checkout 两个兄弟仓库后生成同一个 workspace。
 
 166 个测试，两个后端全绿。核心断言：
 
