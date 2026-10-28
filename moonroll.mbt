@@ -9,7 +9,9 @@
 /// 回滚层（V0.2）：
 /// - `weopqrst/moonroll/session`：`Sim` 接入协议 + `Session` 预测/确认/重放
 ///
-/// 字节协议与网络模拟见 Roadmap V0.3。
+/// 协议层（V0.3）：
+/// - `weopqrst/moonroll/protocol`：输入帧 / 确认帧 / 校验和帧的紧凑字节编解码
+/// - `weopqrst/moonroll/sim_net`：确定性延迟、抖动、丢包、乱序链路模拟器
 pub using @fixed {type Fixed}
 
 ///|
@@ -22,6 +24,17 @@ pub using @input {type InputRing}
 pub using @session {trait Sim, type Session, type SnapshotRing}
 
 ///|
+pub using @protocol {
+  type InputFrame,
+  type ConfirmFrame,
+  type ChecksumFrame,
+  type Message,
+}
+
+///|
+pub using @sim_net {type Link, type NetSim}
+
+///|
 pub fn version() -> String {
-  "0.2.0"
+  "0.3.0"
 }

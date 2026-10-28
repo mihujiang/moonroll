@@ -2,3 +2,9 @@ import {
   "weopqrst/moonroll/digest",
   "weopqrst/moonroll/input",
 }
+
+import {
+  "weopqrst/moonroll/protocol",
+  "weopqrst/moonroll/sim_net",
+  "moonbitlang/core/bench",
+} for "test"

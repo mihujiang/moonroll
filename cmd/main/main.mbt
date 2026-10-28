@@ -1,5 +1,5 @@
 ///|
-/// V0.2 冒烟示例：定点数、状态哈希、输入环、回滚会话。
+/// V0.3 冒烟示例：定点数、状态哈希、输入环、回滚会话、字节协议、确定性链路。
 ///
 /// 运行：
 ///   moon run cmd/main --target wasm-gc
@@ -38,6 +38,20 @@ impl @session.Sim for Demo with fn hash(self) -> UInt64 {
 ///|
 fn input_of(frame : Int, salt : Int) -> UInt64 {
   (frame.to_uint64() * 2654435761UL + salt.to_uint64() * 97UL) & 0xFFUL
+}
+
+///|
+/// 把一条线上的字节解成消息，投递给会话。
+fn apply(payload : Bytes, s : @session.Session[Demo]) -> Unit {
+  for msg in @protocol.decode_batch(payload) {
+    match msg {
+      @protocol.Input(x) =>
+        if x.inputs.length() > 0 {
+          s.receive(x.frame, x.inputs[0])
+        }
+      _ => ()
+    }
+  }
 }
 
 ///|
@@ -100,6 +114,83 @@ fn main {
     pa.rollbacks().to_string() +
     ", frames = " +
     pa.frame().to_string(),
+  )
+  // 5) 字节协议：输入帧 4 字节、确认帧 3 字节、校验和帧 10 字节
+  let wire = @protocol.InputFrame::new(1000, [0b101UL, 0b010UL])
+  let payload = @protocol.encode(@protocol.Message::Input(wire))
+  println("protocol input      = " + payload.length().to_string() + " bytes")
+  println(
+    "protocol round-trip = " +
+    (@protocol.decode(payload) == Some(@protocol.Message::Input(wire))).to_string(),
+  )
+  // 6) 确定性链路：延迟 6 帧 + 抖动 3 帧 + 10% 乱序，包体走真实字节协议
+  let total_net = 300
+  let resend = 16
+  let net_ab = @sim_net.NetSim::new(@sim_net.Link::new(6, 3, 0, 10, 20261028UL))
+  let net_ba = @sim_net.NetSim::new(@sim_net.Link::new(6, 3, 0, 10, 777UL))
+  let na = @session.Session::with_window({ x: 0UL }, 0, 128)
+  let nb = @session.Session::with_window({ x: 0UL }, 1, 128)
+  let mut n = 0
+  while n < total_net {
+    n = n + 1
+    ignore(na.advance(input_of(n, 0)))
+    ignore(nb.advance(input_of(n, 1)))
+    // 每个包夹带最近 `resend` 帧的输入，充当伪可靠层
+    let mut back = n - resend + 1
+    if back < 1 {
+      back = 1
+    }
+    let ab : Array[@protocol.Message] = []
+    let ba : Array[@protocol.Message] = []
+    let mut m = back
+    while m <= n {
+      ab.push(
+        @protocol.Message::Input(@protocol.InputFrame::new(m, [input_of(m, 0)])),
+      )
+      ba.push(
+        @protocol.Message::Input(@protocol.InputFrame::new(m, [input_of(m, 1)])),
+      )
+      m = m + 1
+    }
+    net_ab.send(n, @protocol.encode_batch(ab))
+    net_ba.send(n, @protocol.encode_batch(ba))
+    for p in net_ab.recv(n) {
+      apply(p, nb)
+    }
+    for p in net_ba.recv(n) {
+      apply(p, na)
+    }
+  }
+  // 收尾：再推进若干帧，让在途与乱序的包全部送达
+  let mut t = total_net
+  while t < total_net + 64 {
+    t = t + 1
+    for p in net_ab.recv(t) {
+      apply(p, nb)
+    }
+    for p in net_ba.recv(t) {
+      apply(p, na)
+    }
+  }
+  println(
+    "sim_net peers equal = " +
+    (na.hash() == nb.hash()).to_string() +
+    ", confirmed = " +
+    na.confirmed().to_string() +
+    "/" +
+    nb.confirmed().to_string() +
+    ", rollbacks = " +
+    na.rollbacks().to_string() +
+    "/" +
+    nb.rollbacks().to_string(),
+  )
+  println(
+    "sim_net packets     = delivered " +
+    net_ab.delivered().to_string() +
+    ", dropped " +
+    net_ab.dropped().to_string() +
+    ", in_flight " +
+    net_ab.in_flight().to_string(),
   )
   println("moonroll version    = " + @moonroll.version())
 }

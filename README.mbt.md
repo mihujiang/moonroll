@@ -5,8 +5,8 @@
 MoonBit 生态里 ECS、物理、寻路、渲染、行为树都已经有人做，但"把两个玩家连起来还不漂移"这一层是空白。
 `moonroll` 补的就是这一层：不绑定任何引擎的确定性回滚同步（rollback netcode）。
 
-**状态：V0.2（回滚核心）**。定点数、状态哈希、输入环、预测 / 确认 / 回滚重放已可用；
-字节协议与网络模拟在 V0.3。
+**状态：V0.3（字节协议与网络模拟）**。定点数、状态哈希、输入环、预测 / 确认 / 回滚重放、
+紧凑字节协议、确定性延迟 / 抖动 / 丢包 / 乱序模拟器已可用。
 
 ---
 
@@ -75,6 +75,58 @@ let ring = @input.InputRing::new(64)
 ring.set(frame, 0b101UL)
 ```
 
+## 字节协议
+
+线上格式（小端；`varint` 为 LEB128，帧号小的时候只占 1 字节）：
+
+| 帧 | 布局 |
+| --- | --- |
+| Input | `[0x01][varint frame][varint count][varint bits] × count` |
+| Confirm | `[0x02][varint frame]` |
+| Checksum | `[0x03][varint frame][8 bytes hash]` |
+
+```moonbit nocheck
+let wire = @protocol.encode(@protocol.Message::Input(
+  @protocol.InputFrame::new(42, [0b101UL]),
+))
+let msg = @protocol.decode(wire)          // Some(Input(...))
+
+// 一条链路每帧只发一个包时，把多个帧塞进同一个包
+let batch = @protocol.encode_batch(msgs)
+for m in @protocol.decode_batch(batch) { /* ... */ }
+```
+
+`encode` 不做数量校验（`count` 由调用方决定），`decode` 对截断、未知标签、垃圾字节、
+超过 8 个玩家的帧一律返回 `None`，不会 panic。这是「网络输入不可信」的底线。
+
+## 网络模拟器
+
+```moonbit nocheck
+let net = @sim_net.NetSim::new(
+  @sim_net.Link::new(delay, jitter, loss_pct, reorder_pct, seed),
+)
+net.send(frame, payload)                 // 可能被丢弃
+for packet in net.recv(frame) { /* ... */ } // 到达的包，按到达时间排序
+net.delivered()  // 已交付包数
+net.dropped()    // 丢弃包数
+net.in_flight()  // 在途包数
+```
+
+时间单位是逻辑帧（60fps 下 1 帧 ≈ 16.7ms），内部是确定性 LCG：
+**同 seed、同发送序列必然得到同到达序列**，所以整条链路可以进单元测试和 fuzz。
+
+## 性能
+
+`moon bench -p weopqrst/moonroll/session`（wasm-gc，Windows x64）：
+
+| 场景 | 耗时（均值） |
+| --- | --- |
+| 每帧预测 + 深度 16 回滚重放 | 0.51 µs |
+| 每帧预测 + 深度 128 回滚重放 | 14.4 µs |
+
+基准里的状态是 8 字节的 `UInt64` 计数器，真实引擎的重放成本按「快照大小 × 回滚深度」线性放大，
+可以直接用这个数估上限。
+
 ## 包结构
 
 | 包 | 内容 | 状态 |
@@ -94,19 +146,25 @@ moon test --target js
 moon run cmd/main --target wasm-gc
 ```
 
-25 个测试，两个后端全绿。核心断言：
+43 个测试，两个后端全绿。核心断言：
 
 - 定点数与 `Double` 对拍误差不超过 4 个 LSB；
 - FNV-1a 64 对 `"hello"` 命中标准向量 `0xa430d84680aabd0b`；
 - 双对等体 3000 帧、2 帧固定延迟：终态哈希与顺序参考实现完全一致；
 - 乱序 + 0~3 帧抖动（不丢包）600 帧：终态哈希仍然一致；
+- 8 条链路曲线（0 / 50 / 100 / 200 / 300ms、±50ms 抖动、5% 丢包、25% 乱序）× 300 帧，
+  两端终态哈希都等于顺序参考实现；
+- 1000 组随机 (delay, jitter, loss, reorder, seed) fuzz：两端哈希一致；
+- 协议 round-trip：1000 组随机输入帧 + 500 组确认 / 校验和帧逐位还原；
+  所有前缀截断与随机垃圾字节只返回 `None`，不 panic；
+- 模拟器同种子可复现（同发送序列 → 同到达序列），抖动确实产生逆序交付；
 - 输入环 / 快照环回绕后只保留窗口内帧，旧帧不会误命中。
 
 ## Roadmap
 
 - **V0.1** 基础层：定点数、状态哈希、输入环（已完成）
-- **V0.2** 回滚会话：预测、确认、快照/恢复、重放（当前）
-- **V0.3** 字节协议 + 延迟/抖动/丢包/乱序模拟 + fuzz
+- **V0.2** 回滚会话：预测、确认、快照/恢复、重放（已完成）
+- **V0.3** 字节协议 + 延迟/抖动/丢包/乱序模拟 + fuzz（当前）
 - **V0.4** 接入 `moonphys` 的 wasm-gc 可视化演示（帧时间线、回滚计数、延迟滑块）
 - **V1.0** CI 三后端一致性、文档、mooncakes 发布
 

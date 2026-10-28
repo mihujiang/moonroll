@@ -4,6 +4,8 @@ import {
   "weopqrst/moonroll/digest",
   "weopqrst/moonroll/input",
   "weopqrst/moonroll/session",
+  "weopqrst/moonroll/protocol",
+  "weopqrst/moonroll/sim_net",
 }
 
 pkgtype(kind: "executable")
