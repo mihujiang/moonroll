@@ -29,11 +29,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # enablement: true 让首次运行时自动把仓库的 Pages source 设成 GitHub Actions，
-      # 省掉一次手动进 Settings 的步骤。
+      # GITHUB_TOKEN 没有「创建 Pages site」的权限（会返回 Resource not accessible
+      # by integration），所以首次必须在 Settings → Pages 里把 Source 选成
+      # GitHub Actions，之后本 workflow 才能部署。这里先把原因说清楚，
+      # 免得屏幕上是 configure-pages 的原始报错。
+      - name: Pages 是否已启用
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/pages")
+          if [ "$code" != "200" ]; then
+            echo "::error::GitHub Pages 尚未启用（GET /pages 返回 $code）。打开仓库 Settings → Pages → Build and deployment，把 Source 选成 GitHub Actions，然后重跑本 workflow。"
+            exit 1
+          fi
+
       - uses: actions/configure-pages@v5
-        with:
-          enablement: true
 
       - uses: actions/upload-pages-artifact@v3
         with:

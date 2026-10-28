@@ -344,8 +344,9 @@ node tools/check-demo.mjs
 python -m http.server --directory docs 8123
 ```
 
-推送到 `main` 后 `.github/workflows/pages.yml` 会把 `docs/` 整个目录发布到 GitHub Pages
-（`actions/configure-pages` 带 `enablement: true`，首次运行会自动打开 Pages，不用手点 Settings）。
+推送到 `main` 后 `.github/workflows/pages.yml` 会把 `docs/` 整个目录发布到 GitHub Pages。
+首次需要在仓库 **Settings → Pages → Build and deployment** 里把 Source 选成
+`GitHub Actions`（`GITHUB_TOKEN` 没有创建 Pages site 的权限，这一步只能手点一次）。
 
 页面在 `docs/index.html` + `docs/app.js`，零外部依赖，导出全是数值 ABI：
 
