@@ -1,6 +1,6 @@
 ///|
 /// 应用层冗余重发的帧数。
-const RESEND : Int = 16
+const RESEND : Int32 = 16
 
 ///|
 fn lcg(state : UInt64) -> UInt64 {
@@ -9,7 +9,7 @@ fn lcg(state : UInt64) -> UInt64 {
 
 ///|
 /// 处理一个收到的包：输入帧交给会话，确认帧返回其帧号（0 表示不是确认帧）。
-fn feed(session : Session[Counter], payload : Bytes) -> Int {
+fn feed(session : @session.Session[Counter], payload : Bytes) -> Int32 {
   match @protocol.decode(payload) {
     Some(@protocol.Input(frame)) => {
       session.receive(frame.frame, frame.inputs[0])
@@ -21,20 +21,20 @@ fn feed(session : Session[Counter], payload : Bytes) -> Int {
 }
 
 ///|
-/// 端到端：两个 Session 通过确定性链路互发输入帧与确认帧。
+/// 端到端：两个 @session.Session 通过确定性链路互发输入帧与确认帧。
 ///
 /// 应用层做冗余重发（每帧重发最近 `RESEND` 帧），因此丢包不会造成永久丢失。
 /// 返回 (a.hash, b.hash)。
 fn run_net(
-  delay : Int,
-  jitter : Int,
-  loss : Int,
-  reorder : Int,
+  delay : Int32,
+  jitter : Int32,
+  loss : Int32,
+  reorder : Int32,
   seed : UInt64,
-  total : Int,
+  total : Int32,
 ) -> (UInt64, UInt64) {
-  let a = Session::with_window({ x: 0UL }, 0, 128)
-  let b = Session::with_window({ x: 0UL }, 1, 128)
+  let a = @session.Session::with_window({ x: 0UL, }, 0, 128)
+  let b = @session.Session::with_window({ x: 0UL, }, 1, 128)
   let ab = @sim_net.NetSim::new(
     @sim_net.Link::new(delay, jitter, loss, reorder, seed),
   )
@@ -144,7 +144,7 @@ fn run_net(
 
 ///|
 test "representative network curves converge" {
-  let curves : Array[(Int, Int, Int, Int)] = [
+  let curves : Array[(Int32, Int32, Int32, Int32)] = [
     (0, 0, 0, 0), // 0ms
     (3, 0, 0, 0), // 50ms
     (6, 0, 0, 0), // 100ms
@@ -154,13 +154,13 @@ test "representative network curves converge" {
     (6, 1, 5, 0), // 100ms + 5% 丢包
     (6, 1, 2, 25), // 100ms + 抖动 + 2% 丢包 + 25% 乱序
   ]
-  let gold = { x: 0UL }
+  let gold = { x: 0UL, }
   let mut g = 1
   while g <= 300 {
-    Sim::step(gold, input_of(g, 0), input_of(g, 1))
+    @session.Sim::step(gold, input_of(g, 0), input_of(g, 1))
     g = g + 1
   }
-  let expected = Sim::hash(gold)
+  let expected = @session.Sim::hash(gold)
   for curve in curves {
     let (delay, jitter, loss, reorder) = curve
     let (ha, hb) = run_net(delay, jitter, loss, reorder, 20260101UL, 300)

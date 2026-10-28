@@ -5,9 +5,11 @@
 MoonBit 生态里 ECS、物理、寻路、渲染、行为树都已经有人做，但"把两个玩家连起来还不漂移"这一层是空白。
 `moonroll` 补的就是这一层：不绑定任何引擎的确定性回滚同步（rollback netcode）。
 
-**状态：V0.4（接入 moonphys + 可视化）**。定点数、状态哈希、输入环、预测 / 确认 / 回滚重放、
-紧凑字节协议、确定性延迟 / 抖动 / 丢包 / 乱序模拟器，以及一个把两个 `moonphys` 物理世界
-连起来的可运行演示。
+**状态：V0.5（示例与 CI 收口）**。定点数、状态哈希、输入环、预测 / 确认 / 回滚重放、
+紧凑字节协议、确定性延迟 / 抖动 / 丢包 / 乱序模拟器，一个把两个 `moonphys` 物理世界连起来的
+可视化演示，以及三个 `moon run` 就能跑的示例。
+
+设计取舍见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
 
 ---
 
@@ -116,6 +118,29 @@ net.in_flight()  // 在途包数
 时间单位是逻辑帧（60fps 下 1 帧 ≈ 16.7ms），内部是确定性 LCG：
 **同 seed、同发送序列必然得到同到达序列**，所以整条链路可以进单元测试和 fuzz。
 
+## 三个 `moon run` 就能跑的示例
+
+```bash
+moon run examples/two_peer        # 最小闭环：两个 Session + 字节协议 + 3 帧延迟
+moon run examples/latency_chart   # 8 条典型链路的回滚成本表
+moon run examples/desync_demo     # 分叉检测自证：注入输入不一致，报出确切帧号
+```
+
+`latency_chart` 的真实输出（300 帧，60fps，全部 `desync=0`）：
+
+| 场景 | 延迟(帧) | 抖动 | 丢包 | 乱序 | 回滚次数 | 重放帧数 | 最大深度 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 局域网 16ms | 0 | 0 | 0% | 0% | 300 | 300 | 1 |
+| 同城 33ms | 2 | 0 | 0% | 0% | 300 | 897 | 3 |
+| 跨城 100ms | 6 | 0 | 0% | 0% | 300 | 2079 | 7 |
+| 跨城 100ms ±50ms | 6 | 3 | 0% | 0% | 300 | 2443 | 10 |
+| 跨城 100ms +5% 丢包 | 6 | 3 | 5% | 0% | 300 | 2468 | 11 |
+| 跨洋 200ms ±50ms | 12 | 3 | 0% | 0% | 300 | 4180 | 16 |
+| 跨洋 200ms ±50ms +25% 乱序 | 12 | 3 | 0% | 25% | 300 | 4229 | 17 |
+
+回滚次数恒等于帧数（每帧都会收到一帧更早的输入），真正随延迟增长的是「重放帧数」
+与「最大深度」——那才是 CPU 成本。
+
 ## 演示：两个物理世界互相同步
 
 `adapters/phys` 把 `moonphys` 的 `World` 包成 `Sim`（`save` / `restore` 走
@@ -160,6 +185,10 @@ python -m http.server --directory docs 8123   # 打开 http://localhost:8123/
 | `weopqrst/moonroll/sim_net` | 延迟 / 抖动 / 丢包 / 乱序模拟器 | V0.3 |
 | `weopqrst/moonroll/adapters/phys` | `moonphys` 参考适配层（`PhysSim`） | V0.4 |
 | `weopqrst/moonroll/demo` | wasm-gc 演示引擎（`mr_*` 数值导出） | V0.4 |
+| `weopqrst/moonroll/examples/scene` | 示例共用场景与对局运行器 | V0.5 |
+| `weopqrst/moonroll/examples/two_peer` | 最小联机闭环 | V0.5 |
+| `weopqrst/moonroll/examples/latency_chart` | 延迟 / 抖动 / 丢包扫描表 | V0.5 |
+| `weopqrst/moonroll/examples/desync_demo` | 分叉检测自证 | V0.5 |
 
 ## 验证
 
@@ -169,7 +198,7 @@ moon test --target js
 moon run cmd/main --target wasm-gc
 ```
 
-117 个测试，两个后端全绿。核心断言：
+122 个测试，两个后端全绿；`moon check --deny-warn` 与 `moon fmt --check` 在 CI 里全绿。核心断言：
 
 - 定点数与 `Double` 对拍误差不超过 4 个 LSB；
 - FNV-1a 64 对 `"hello"` 命中标准向量 `0xa430d84680aabd0b`；
@@ -185,14 +214,17 @@ moon run cmd/main --target wasm-gc
 - 两个 `moonphys` 物理世界 240 帧逐位相同；120 帧快照恢复后重放至 300 帧，hash 仍与不中断运行一致；
 - 200ms 延迟 + 50ms 抖动下 600 帧真实对局：`desync=0`，两端在已确认帧上哈希逐步一致；
 - 15% 丢包下回滚次数大于零，但两端仍是 `desync=0`（重发把丢掉的输入补齐）；
-- `hash_at` 在回滚重放后返回重放结果，超出快照窗口后返回 `None`。
+- `hash_at` 在回滚重放后返回重放结果，超出快照窗口后返回 `None`；
+- 示例层：干净链路零失配；注入一处输入不一致后，分叉被报在恰好那一帧上；
+  同参数两次运行的统计量逐项相等。
 
 ## Roadmap
 
 - **V0.1** 基础层：定点数、状态哈希、输入环（已完成）
 - **V0.2** 回滚会话：预测、确认、快照/恢复、重放（已完成）
 - **V0.3** 字节协议 + 延迟/抖动/丢包/乱序模拟 + fuzz（已完成）
-- **V0.4** 接入 `moonphys` 的 wasm-gc 可视化演示（双世界对照、回滚计数、延迟滑块）（当前）
+- **V0.4** 接入 `moonphys` 的 wasm-gc 可视化演示（双世界对照、回滚计数、延迟滑块）（已完成）
+- **V0.5** 三个可运行示例 + 零警告 CI + 架构文档（当前）
 - **V1.0** CI 三后端一致性、文档、mooncakes 发布
 
 ## 明确不做

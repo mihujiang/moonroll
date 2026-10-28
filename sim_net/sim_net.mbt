@@ -1,19 +1,19 @@
 ///|
 /// 链路参数。时间单位是「帧」（逻辑 tick），60fps 下 1 帧约 16.7ms。
 pub(all) struct Link {
-  delay : Int
-  jitter : Int
-  loss_pct : Int
-  reorder_pct : Int
+  delay : Int32
+  jitter : Int32
+  loss_pct : Int32
+  reorder_pct : Int32
   seed : UInt64
 }
 
 ///|
 pub fn Link::new(
-  delay : Int,
-  jitter : Int,
-  loss_pct : Int,
-  reorder_pct : Int,
+  delay : Int32,
+  jitter : Int32,
+  loss_pct : Int32,
+  reorder_pct : Int32,
   seed : UInt64,
 ) -> Link {
   {
@@ -47,7 +47,7 @@ pub fn Link::new(
 
 ///|
 struct Packet {
-  arrive_at : Int
+  arrive_at : Int32
   payload : Bytes
 }
 
@@ -57,24 +57,24 @@ pub struct NetSim {
   link : Link
   mut seed : UInt64
   mut queue : Array[Packet]
-  mut delivered : Int
-  mut dropped : Int
+  mut delivered : Int32
+  mut dropped : Int32
 }
 
 ///|
 pub fn NetSim::new(link : Link) -> NetSim {
-  { link, seed: link.seed, queue: [], delivered: 0, dropped: 0 }
+  { link, seed: link.seed, queue: [], delivered: 0, dropped: 0, }
 }
 
 ///|
-fn NetSim::rand(self : NetSim) -> Int {
+fn NetSim::rand(self : NetSim) -> Int32 {
   self.seed = self.seed * 6364136223846793005UL + 1442695040888963407UL
   ((self.seed >> 33) & 0x7FFFFFFFUL).to_int()
 }
 
 ///|
 /// 在 `now` 时刻发出一个包。可能被丢弃，否则按 delay + jitter 到达。
-pub fn NetSim::send(self : NetSim, now : Int, payload : Bytes) -> Unit {
+pub fn NetSim::send(self : NetSim, now : Int32, payload : Bytes) -> Unit {
   if self.link.loss_pct > 0 && self.rand() % 100 < self.link.loss_pct {
     self.dropped = self.dropped + 1
     return
@@ -86,12 +86,12 @@ pub fn NetSim::send(self : NetSim, now : Int, payload : Bytes) -> Unit {
   if self.link.reorder_pct > 0 && self.rand() % 100 < self.link.reorder_pct {
     d = d + 1
   }
-  self.queue.push({ arrive_at: now + d, payload })
+  self.queue.push({ arrive_at: now + d, payload, })
 }
 
 ///|
 /// 取出 `now` 时刻已到达的包，按到达时间升序返回（模拟乱序）。
-pub fn NetSim::recv(self : NetSim, now : Int) -> Array[Bytes] {
+pub fn NetSim::recv(self : NetSim, now : Int32) -> Array[Bytes] {
   let ready : Array[Packet] = []
   let later : Array[Packet] = []
   for p in self.queue {
@@ -123,16 +123,16 @@ pub fn NetSim::recv(self : NetSim, now : Int) -> Array[Bytes] {
 }
 
 ///|
-pub fn NetSim::delivered(self : NetSim) -> Int {
+pub fn NetSim::delivered(self : NetSim) -> Int32 {
   self.delivered
 }
 
 ///|
-pub fn NetSim::dropped(self : NetSim) -> Int {
+pub fn NetSim::dropped(self : NetSim) -> Int32 {
   self.dropped
 }
 
 ///|
-pub fn NetSim::in_flight(self : NetSim) -> Int {
+pub fn NetSim::in_flight(self : NetSim) -> Int32 {
   self.queue.length()
 }

@@ -2,12 +2,15 @@
 
 > Sans-IO deterministic rollback netcode for MoonBit.
 
-MoonBit 生态里 ECS、物理、寻路、渲染、行为树都已经有人做，但"把两个玩家连起来还不漂移"这一层是空白。
+MoonBit 生态里"把两个玩家连起来还不漂移"这一层是空白。
 `moonroll` 补的就是这一层：不绑定任何引擎的确定性回滚同步（rollback netcode）。
 
-**状态：V0.4（接入 moonphys + 可视化）**。定点数、状态哈希、输入环、预测 / 确认 / 回滚重放、
-紧凑字节协议、确定性延迟 / 抖动 / 丢包 / 乱序模拟器，以及一个把两个 `moonphys` 物理世界
-连起来的可运行演示。
+**状态：V0.5（示例与 CI 收口）**。定点数、状态哈希、输入环、预测 / 确认 / 回滚重放、
+紧凑字节协议、确定性延迟 / 抖动 / 丢包 / 乱序模拟器，一个把两个 `moonphys` 物理世界连起来的
+可视化演示，以及三个 `moon run` 就能跑的示例。`moon check --deny-warn` 与 `moon fmt --check`
+在 CI 里全绿。
+
+设计取舍见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
 
 ---
 
@@ -115,6 +118,42 @@ net.in_flight()  // 在途包数
 时间单位是逻辑帧（60fps 下 1 帧 ≈ 16.7ms），内部是确定性 LCG：
 **同 seed、同发送序列必然得到同到达序列**，所以整条链路可以进单元测试和 fuzz。
 
+## 三个 `moon run` 就能跑的示例
+
+```bash
+# 1) 最小闭环：两个 Session + 真实字节协议 + 3 帧延迟链路，逐帧打印收敛过程
+moon run examples/two_peer
+
+# 2) 延迟曲线：8 条典型链路跑同一局，输出可贴进文档的表格
+moon run examples/latency_chart
+
+# 3) 分叉检测自证：正常局不报警，注入一处输入不一致后被抓到具体帧号
+moon run examples/desync_demo
+```
+
+`latency_chart` 的真实输出（300 帧，60fps）：
+
+| 场景 | 延迟 | 抖动 | 丢包 | 乱序 | 回滚次数 | 重放帧数 | 最大深度 | 确认帧 | 分叉帧 | 一致 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 局域网 16ms | 0 | 0 | 0% | 0% | 300 | 300 | 1 | 300/300 | - | yes |
+| 同城 33ms | 2 | 0 | 0% | 0% | 300 | 897 | 3 | 300/300 | - | yes |
+| 跨城 100ms | 6 | 0 | 0% | 0% | 300 | 2079 | 7 | 300/300 | - | yes |
+| 跨城 100ms ±50ms | 6 | 3 | 0% | 0% | 300 | 2443 | 10 | 300/300 | - | yes |
+| 跨城 100ms +10% 乱序 | 6 | 3 | 0% | 10% | 300 | 2464 | 11 | 300/300 | - | yes |
+| 跨城 100ms +5% 丢包 | 6 | 3 | 5% | 0% | 300 | 2468 | 11 | 300/300 | - | yes |
+| 跨洋 200ms ±50ms | 12 | 3 | 0% | 0% | 300 | 4180 | 16 | 300/300 | - | yes |
+| 跨洋 200ms ±50ms +25% 乱序 | 12 | 3 | 0% | 25% | 300 | 4229 | 17 | 300/300 | - | yes |
+
+延迟 / 抖动单位是逻辑帧（1 帧 ≈ 16.7ms），丢包 / 乱序是百分比。
+
+**回滚次数恒等于帧数**——每帧都会收到一帧更早的输入，必然重放一次。真正随延迟
+增长的是「重放帧数」和「最大深度」，那才是 CPU 成本：局域网 300 帧重放 300 帧，
+跨洋 200ms 要重放 4229 帧（约 14 倍）。
+
+`two_peer` 的循环是手写的，可以当接入模板读：每帧打包「最近 8 帧输入 + 确认帧 +
+校验和帧」，接收端解码后逐条投递。`desync_demo` 里那处故障注入用的是「本地执行 A、
+发出去的是 B」——不能直接去改内存里的状态，回滚会从快照恢复并把它洗掉。
+
 ## 演示：两个物理世界互相同步
 
 `adapters/phys` 把 `moonphys` 的 `World` 包成 `Sim`：`save` / `restore` 走
@@ -175,16 +214,25 @@ python -m http.server --directory docs 8123
 | `weopqrst/moonroll/sim_net` | 延迟 / 抖动 / 丢包 / 乱序模拟器 | V0.3 |
 | `weopqrst/moonroll/adapters/phys` | `moonphys` 参考适配层（`PhysSim`） | V0.4 |
 | `weopqrst/moonroll/demo` | wasm-gc 演示引擎（`mr_*` 数值导出） | V0.4 |
+| `weopqrst/moonroll/examples/scene` | 示例共用场景与对局运行器 | V0.5 |
+| `weopqrst/moonroll/examples/two_peer` | 最小联机闭环 | V0.5 |
+| `weopqrst/moonroll/examples/latency_chart` | 延迟 / 抖动 / 丢包扫描表 | V0.5 |
+| `weopqrst/moonroll/examples/desync_demo` | 分叉检测自证 | V0.5 |
 
 ## 验证
 
 ```bash
+moon check --deny-warn     # 零警告
+moon fmt --check           # 格式一致
 moon test --target wasm-gc
 moon test --target js
-moon run cmd/main --target wasm-gc
+node tools/check-demo.mjs  # 1800 帧 wasm 自检
 ```
 
-117 个测试，两个后端全绿。核心断言：
+CI（`.github/workflows/ci.yml`）跑的就是这一串，外加三个示例的冒烟和
+「提交的 `docs/engine.wasm` 必须与重新构建的产物逐字节一致」。
+
+122 个测试，两个后端全绿。核心断言：
 
 - 定点数与 `Double` 对拍误差不超过 4 个 LSB；
 - FNV-1a 64 对 `"hello"` 命中标准向量 `0xa430d84680aabd0b`；
@@ -200,15 +248,19 @@ moon run cmd/main --target wasm-gc
 - **两个 `moonphys` 物理世界 240 帧逐位相同；120 帧快照恢复后重放至 300 帧，hash 仍与不中断运行一致；**
 - **200ms 延迟 + 50ms 抖动下 600 帧真实对局：`desync=0`，两端在已确认帧上哈希逐步一致；**
 - **15% 丢包下回滚次数大于零，但两端仍是 `desync=0`（重发把丢掉的输入补齐）；**
-- **`hash_at` 在回滚重放后返回重放结果，超出快照窗口后返回 `None`。**
+- **`hash_at` 在回滚重放后返回重放结果，超出快照窗口后返回 `None`；**
+- **示例层：干净链路零失配；注入一处输入不一致后，分叉被报在**恰好那一帧**上，
+  且两端哈希不同；同参数两次运行的统计量逐项相等；重放帧数随延迟显著增长而
+  回滚次数恒等于帧数。**
 
 ## Roadmap
 
 - **V0.1** 基础层：定点数、状态哈希、输入环（已完成）
 - **V0.2** 回滚会话：预测、确认、快照/恢复、重放（已完成）
 - **V0.3** 字节协议 + 延迟/抖动/丢包/乱序模拟 + fuzz（已完成）
-- **V0.4** 接入 `moonphys` 的 wasm-gc 可视化演示（双世界对照、回滚计数、延迟滑块）（当前）
-- **V1.0** CI 三后端一致性、文档、mooncakes 发布
+- **V0.4** 接入 `moonphys` 的 wasm-gc 可视化演示（双世界对照、回滚计数、延迟滑块）（已完成）
+- **V0.5** 三个可运行示例 + 零警告 CI（`--deny-warn`、`fmt --check`、demo 产物校验）+ 架构文档（当前）
+- **V1.0** GitHub Pages 在线演示、验收脚本、mooncakes 发布
 
 ## 明确不做
 

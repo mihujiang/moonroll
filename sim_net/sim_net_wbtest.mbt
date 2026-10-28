@@ -27,14 +27,14 @@ test "total loss drops everything" {
 
 ///|
 test "same seed reproduces same arrival sequence" {
-  let run = fn(seed : UInt64) -> Array[Int] {
+  let run = fn(seed : UInt64) -> Array[Int32] {
     let net = NetSim::new(Link::new(2, 3, 10, 20, seed))
     let mut t = 0
     while t < 50 {
       net.send(t, Bytes::makei(1, fn(_) { t.to_byte() }))
       t = t + 1
     }
-    let out : Array[Int] = []
+    let out : Array[Int32] = []
     let mut now = 0
     while now < 90 {
       for p in net.recv(now) {
@@ -64,7 +64,7 @@ test "jitter produces out of order arrival" {
     net.send(t, Bytes::makei(1, fn(_) { t.to_byte() }))
     t = t + 1
   }
-  let order : Array[Int] = []
+  let order : Array[Int32] = []
   let mut now = 0
   while now < 40 {
     for p in net.recv(now) {

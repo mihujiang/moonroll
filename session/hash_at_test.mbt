@@ -1,7 +1,7 @@
 ///|
 /// 历史哈希只应反映「重放之后」的结果，且超出快照窗口后自然失效。
 test "hash_at follows replay and expires outside the window" {
-  let s = Session::with_window({ x: 0UL, }, 0, 4)
+  let s = @session.Session::with_window({ x: 0UL, }, 0, 4)
   let mut f = 0
   while f < 3 {
     f = f + 1
@@ -26,8 +26,8 @@ test "hash_at follows replay and expires outside the window" {
 ///|
 /// 同一帧在两端的哈希必须一致：这是「世界没分叉」的唯一判据。
 test "confirmed frames hash identically on both peers" {
-  let a = Session::with_window({ x: 0UL, }, 0, 128)
-  let b = Session::with_window({ x: 0UL, }, 1, 128)
+  let a = @session.Session::with_window({ x: 0UL, }, 0, 128)
+  let b = @session.Session::with_window({ x: 0UL, }, 1, 128)
   let mut f = 0
   while f < 200 {
     f = f + 1

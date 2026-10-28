@@ -15,6 +15,10 @@ pub struct Session[T] {
   mut frame : Int32
   mut confirmed : Int32
   mut rollbacks : Int32
+  /// 累计重放过的帧数（`回滚次数 × 平均深度`）。
+  mut replayed : Int64
+  /// 单次回滚重放过的最大帧数，用来观察链路最坏情况。
+  mut max_depth : Int32
   p0 : @input.InputRing
   p1 : @input.InputRing
   snaps : SnapshotRing
@@ -55,6 +59,8 @@ pub fn[T : Sim] Session::with_window(
     frame: 0,
     confirmed: 0,
     rollbacks: 0,
+    replayed: 0L,
+    max_depth: 0,
     p0: @input.InputRing::new(cap),
     p1: @input.InputRing::new(cap),
     snaps,
@@ -85,6 +91,21 @@ pub fn[T] Session::rollbacks(self : Session[T]) -> Int32 {
 ///|
 pub fn[T : Sim] Session::hash(self : Session[T]) -> UInt64 {
   self.sim.hash()
+}
+
+///|
+/// 累计重放过的帧数。
+///
+/// 回滚次数只说明「重放了几次」，真正影响 CPU 的是重放深度；
+/// 链路延迟越大，这个数相对帧数涨得越快。
+pub fn[T] Session::replayed(self : Session[T]) -> Int64 {
+  self.replayed
+}
+
+///|
+/// 单次回滚里重放过的最大帧数（最坏情况的深度）。
+pub fn[T] Session::max_rollback_depth(self : Session[T]) -> Int32 {
+  self.max_depth
 }
 
 ///|
@@ -211,6 +232,11 @@ fn[T : Sim] Session::replay_from(self : Session[T], base : Int32) -> Unit {
         f = f + 1
       }
       self.rollbacks = self.rollbacks + 1
+      let depth = self.frame - base
+      self.replayed = self.replayed + depth.to_int64()
+      if depth > self.max_depth {
+        self.max_depth = depth
+      }
     }
   }
 }

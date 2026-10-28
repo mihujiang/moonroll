@@ -6,12 +6,12 @@ struct Counter {
 }
 
 ///|
-impl Sim for Counter with fn save(self) -> Bytes {
+impl @session.Sim for Counter with fn save(self) -> Bytes {
   Bytes::makei(8, fn(i) { ((self.x >> (i * 8)) & 0xFFUL).to_int().to_byte() })
 }
 
 ///|
-impl Sim for Counter with fn restore(self, bytes : Bytes) -> Unit {
+impl @session.Sim for Counter with fn restore(self, bytes : Bytes) -> Unit {
   let mut x = 0UL
   let mut i = 0
   while i < 8 {
@@ -22,23 +22,23 @@ impl Sim for Counter with fn restore(self, bytes : Bytes) -> Unit {
 }
 
 ///|
-impl Sim for Counter with fn step(self, a : UInt64, b : UInt64) -> Unit {
+impl @session.Sim for Counter with fn step(self, a : UInt64, b : UInt64) -> Unit {
   self.x = self.x * 31UL + (a & 0xFFUL) + ((b & 0xFFUL) << 32)
 }
 
 ///|
-impl Sim for Counter with fn hash(self) -> UInt64 {
+impl @session.Sim for Counter with fn hash(self) -> UInt64 {
   @digest.hash_u64(self.x)
 }
 
 ///|
-fn input_of(frame : Int, salt : Int) -> UInt64 {
+fn input_of(frame : Int32, salt : Int32) -> UInt64 {
   (frame.to_uint64() * 2654435761UL + salt.to_uint64() * 97UL) & 0xFFUL
 }
 
 ///|
 test "single session without remote input keeps no rollback" {
-  let s = Session::new({ x: 0UL }, 0)
+  let s = @session.Session::new({ x: 0UL, }, 0)
   let mut f = 0
   while f < 100 {
     f = f + 1
@@ -53,8 +53,8 @@ test "single session without remote input keeps no rollback" {
 test "two peers converge under 2 frame delay over 3000 frames" {
   let total = 3000
   let delay = 2
-  let a = Session::with_window({ x: 0UL }, 0, 128)
-  let b = Session::with_window({ x: 0UL }, 1, 128)
+  let a = @session.Session::with_window({ x: 0UL, }, 0, 128)
+  let b = @session.Session::with_window({ x: 0UL, }, 1, 128)
   let mut f = 0
   while f < total {
     f = f + 1
@@ -72,14 +72,14 @@ test "two peers converge under 2 frame delay over 3000 frames" {
     b.receive(d, input_of(d, 0))
     d = d + 1
   }
-  let gold = { x: 0UL }
+  let gold = { x: 0UL, }
   let mut g = 1
   while g <= total {
-    Sim::step(gold, input_of(g, 0), input_of(g, 1))
+    @session.Sim::step(gold, input_of(g, 0), input_of(g, 1))
     g = g + 1
   }
-  assert_eq(a.hash(), Sim::hash(gold))
-  assert_eq(b.hash(), Sim::hash(gold))
+  assert_eq(a.hash(), @session.Sim::hash(gold))
+  assert_eq(b.hash(), @session.Sim::hash(gold))
   assert_true(a.rollbacks() > 0)
   assert_eq(a.confirmed(), total)
   assert_eq(b.confirmed(), total)
@@ -88,11 +88,11 @@ test "two peers converge under 2 frame delay over 3000 frames" {
 ///|
 test "jittery out of order delivery still converges" {
   let total = 600
-  let a = Session::with_window({ x: 0UL }, 0, 128)
-  let b = Session::with_window({ x: 0UL }, 1, 128)
+  let a = @session.Session::with_window({ x: 0UL, }, 0, 128)
+  let b = @session.Session::with_window({ x: 0UL, }, 1, 128)
   // 每帧的到达抖动 0..3，乱序但不丢包
   let jitter = [0, 2, 1, 3, 2, 0, 3, 1]
-  fn arrive_at(m : Int) -> Int {
+  fn arrive_at(m : Int32) -> Int32 {
     m + jitter[m % 8]
   }
 
@@ -120,19 +120,19 @@ test "jittery out of order delivery still converges" {
     }
     m = m + 1
   }
-  let gold = { x: 0UL }
+  let gold = { x: 0UL, }
   let mut g = 1
   while g <= total {
-    Sim::step(gold, input_of(g, 0), input_of(g, 1))
+    @session.Sim::step(gold, input_of(g, 0), input_of(g, 1))
     g = g + 1
   }
-  assert_eq(a.hash(), Sim::hash(gold))
-  assert_eq(b.hash(), Sim::hash(gold))
+  assert_eq(a.hash(), @session.Sim::hash(gold))
+  assert_eq(b.hash(), @session.Sim::hash(gold))
 }
 
 ///|
 test "snapshot ring evicts overwritten frames" {
-  let r = SnapshotRing::new(3)
+  let r = @session.SnapshotRing::new(3)
   r.set(10, b"a")
   assert_true(r.get(10) is Some(_))
   r.set(13, b"d")

@@ -29,8 +29,8 @@ pub fn Fixed::raw(self : Fixed) -> Int64 {
 
 ///|
 /// 整数 -> 定点数。
-pub fn Fixed::from_int(value : Int) -> Fixed {
-  { v: value.to_int64() * FIXED_SCALE }
+pub fn Fixed::from_int(value : Int32) -> Fixed {
+  { v: value.to_int64() * FIXED_SCALE, }
 }
 
 ///|
@@ -42,7 +42,7 @@ pub fn Fixed::from_double(value : Double) -> Fixed {
   } else {
     (scaled - 0.5).to_int64()
   }
-  { v: rounded }
+  { v: rounded, }
 }
 
 ///|
@@ -54,7 +54,7 @@ pub fn Fixed::to_double(self : Fixed) -> Double {
 ///|
 pub fn Fixed::abs(self : Fixed) -> Fixed {
   if self.v < 0L {
-    { v: -self.v }
+    { v: -self.v, }
   } else {
     self
   }
@@ -62,31 +62,31 @@ pub fn Fixed::abs(self : Fixed) -> Fixed {
 
 ///|
 pub impl Neg for Fixed with fn neg(self) {
-  { v: -self.v }
+  { v: -self.v, }
 }
 
 ///|
 pub impl Add for Fixed with fn add(self, other) {
-  { v: self.v + other.v }
+  { v: self.v + other.v, }
 }
 
 ///|
 pub impl Sub for Fixed with fn sub(self, other) {
-  { v: self.v - other.v }
+  { v: self.v - other.v, }
 }
 
 ///|
 pub impl Mul for Fixed with fn mul(self, other) {
-  { v: (self.v * other.v) >> 16 }
+  { v: (self.v * other.v) >> 16, }
 }
 
 ///|
 pub impl Div for Fixed with fn div(self, other) {
-  { v: (self.v << 16) / other.v }
+  { v: (self.v << 16) / other.v, }
 }
 
 ///|
-pub impl Compare for Fixed with fn compare(self, other) -> Int {
+pub impl Compare for Fixed with fn compare(self, other) -> Int32 {
   if self.v < other.v {
     -1
   } else if self.v > other.v {
@@ -95,6 +95,31 @@ pub impl Compare for Fixed with fn compare(self, other) -> Int {
     0
   }
 }
+
+///|
+/// 显式声明运算符方法提升为普通方法。
+///
+/// 新版编译器已弃用「实现自动提升」，不声明会在 `moon check --deny-warn` 下
+/// 变成错误（W0079）。
+pub extend Fixed with Eq::{not_equal, equal}
+
+///|
+pub extend Fixed with Neg::{neg}
+
+///|
+pub extend Fixed with Add::{add}
+
+///|
+pub extend Fixed with Sub::{sub}
+
+///|
+pub extend Fixed with Mul::{mul}
+
+///|
+pub extend Fixed with Div::{div}
+
+///|
+pub extend Fixed with Compare::{op_lt, op_le, op_ge, compare, op_gt}
 
 ///|
 /// 整数平方根（牛顿迭代，纯整数，确定性）。
@@ -118,7 +143,7 @@ fn isqrt(n : Int64) -> Int64 {
 /// 因此对 `v << 16` 求整数平方根即可。
 pub fn Fixed::sqrt(self : Fixed) -> Fixed {
   if self.v <= 0L {
-    return { v: 0L }
+    return { v: 0L, }
   }
   let n = self.v << 16
   let r = isqrt(n)
@@ -126,9 +151,9 @@ pub fn Fixed::sqrt(self : Fixed) -> Fixed {
   let below = n - r * r
   let above = (r + 1L) * (r + 1L) - n
   if above < below {
-    { v: r + 1L }
+    { v: r + 1L, }
   } else {
-    { v: r }
+    { v: r, }
   }
 }
 

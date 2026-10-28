@@ -1,21 +1,24 @@
 ///|
 /// 基准用的帧游标：闭包内需要自增，用带可变字段的结构体承载。
 struct BenchCursor {
-  mut f : Int
+  mut f : Int32
 }
 
 ///|
 /// 建一个已经预热到 `warm` 帧的会话，保证后续 `receive` 的帧号为正。
 ///
 /// `window` 必须大于回滚深度，否则 `replay_from` 会直接放弃该次回滚。
-fn bench_session(warm : Int, window : Int) -> (Session[Counter], BenchCursor) {
-  let s = Session::with_window({ x: 0UL }, 0, window)
+fn bench_session(
+  warm : Int32,
+  window : Int32,
+) -> (@session.Session[Counter], BenchCursor) {
+  let s = @session.Session::with_window({ x: 0UL, }, 0, window)
   let mut w = 0
   while w < warm {
     w = w + 1
     ignore(s.advance(input_of(w, 0)))
   }
-  (s, { f: warm })
+  (s, { f: warm, })
 }
 
 ///|

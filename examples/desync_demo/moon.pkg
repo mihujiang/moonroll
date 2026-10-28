@@ -1,0 +1,5 @@
+import {
+  "weopqrst/moonroll/examples/scene",
+}
+
+pkgtype(kind: "executable")

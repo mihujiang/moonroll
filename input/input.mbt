@@ -8,26 +8,26 @@
 /// 输入用 `UInt64` 位图表示（64 个按键 / 摇杆量化位），
 /// 一帧一个玩家 8 字节，便于后续直接序列化进协议包。
 pub struct InputRing {
-  capacity : Int
-  frames : Array[Int]
+  capacity : Int32
+  frames : Array[Int32]
   bits : Array[UInt64]
 }
 
 ///|
 /// 创建缓冲，`capacity` 至少为 1；实际应设置到回滚窗口的两倍以上。
-pub fn InputRing::new(capacity : Int) -> InputRing {
+pub fn InputRing::new(capacity : Int32) -> InputRing {
   let cap = if capacity < 1 { 1 } else { capacity }
-  { capacity: cap, frames: Array::make(cap, -1), bits: Array::make(cap, 0UL) }
+  { capacity: cap, frames: Array::make(cap, -1), bits: Array::make(cap, 0UL), }
 }
 
 ///|
 /// 环容量。
-pub fn InputRing::capacity(self : InputRing) -> Int {
+pub fn InputRing::capacity(self : InputRing) -> Int32 {
   self.capacity
 }
 
 ///|
-fn InputRing::slot(self : InputRing, frame : Int) -> Int {
+fn InputRing::slot(self : InputRing, frame : Int32) -> Int32 {
   let m = frame % self.capacity
   if m < 0 {
     m + self.capacity
@@ -38,7 +38,7 @@ fn InputRing::slot(self : InputRing, frame : Int) -> Int {
 
 ///|
 /// 写入某帧输入，覆盖同槽位的旧帧。
-pub fn InputRing::set(self : InputRing, frame : Int, bits : UInt64) -> Unit {
+pub fn InputRing::set(self : InputRing, frame : Int32, bits : UInt64) -> Unit {
   let i = self.slot(frame)
   self.frames[i] = frame
   self.bits[i] = bits
@@ -46,7 +46,7 @@ pub fn InputRing::set(self : InputRing, frame : Int, bits : UInt64) -> Unit {
 
 ///|
 /// 读取某帧输入；未写入或已被覆盖时返回 `None`。
-pub fn InputRing::get(self : InputRing, frame : Int) -> UInt64? {
+pub fn InputRing::get(self : InputRing, frame : Int32) -> UInt64? {
   let i = self.slot(frame)
   if self.frames[i] == frame {
     Some(self.bits[i])
@@ -56,6 +56,6 @@ pub fn InputRing::get(self : InputRing, frame : Int) -> UInt64? {
 }
 
 ///|
-pub fn InputRing::has(self : InputRing, frame : Int) -> Bool {
+pub fn InputRing::has(self : InputRing, frame : Int32) -> Bool {
   self.get(frame) is Some(_)
 }

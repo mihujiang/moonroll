@@ -15,12 +15,12 @@ const FNV_PRIME : UInt64 = 0x100000001b3UL
 
 ///|
 pub fn Digest::new() -> Digest {
-  { state: FNV_OFFSET_BASIS }
+  { state: FNV_OFFSET_BASIS, }
 }
 
 ///|
 /// 喂入一个字节（低 8 位有效）。
-pub fn Digest::feed_byte(self : Digest, byte : Int) -> Unit {
+pub fn Digest::feed_byte(self : Digest, byte : Int32) -> Unit {
   self.state = (self.state ^ (byte & 0xFF).to_uint64()) * FNV_PRIME
 }
 

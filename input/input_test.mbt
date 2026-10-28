@@ -2,7 +2,7 @@
 
 ///|
 test "set then get" {
-  let ring = InputRing::new(8)
+  let ring = @input.InputRing::new(8)
   ring.set(3, 0b1010UL)
   assert_eq(ring.get(3), Some(0b1010UL))
   assert_true(ring.has(3))
@@ -10,14 +10,14 @@ test "set then get" {
 
 ///|
 test "missing frame returns none" {
-  let ring = InputRing::new(8)
+  let ring = @input.InputRing::new(8)
   assert_eq(ring.get(5), None)
   assert_false(ring.has(5))
 }
 
 ///|
 test "capacity is clamped to at least one" {
-  let ring = InputRing::new(0)
+  let ring = @input.InputRing::new(0)
   assert_eq(ring.capacity(), 1)
   ring.set(0, 1UL)
   assert_eq(ring.get(0), Some(1UL))
@@ -25,7 +25,7 @@ test "capacity is clamped to at least one" {
 
 ///|
 test "wrap around keeps recent frames only" {
-  let ring = InputRing::new(4)
+  let ring = @input.InputRing::new(4)
   let mut frame = 0
   while frame < 10 {
     ring.set(frame, frame.to_uint64())
@@ -42,7 +42,7 @@ test "wrap around keeps recent frames only" {
 
 ///|
 test "negative frame does not panic" {
-  let ring = InputRing::new(4)
+  let ring = @input.InputRing::new(4)
   ring.set(-1, 7UL)
   assert_eq(ring.get(-1), Some(7UL))
   assert_eq(ring.get(3), None)

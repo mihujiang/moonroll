@@ -8,18 +8,18 @@
 /// Checksum : [0x03][varint frame][8 bytes hash]
 /// ```
 pub(all) struct InputFrame {
-  frame : Int
+  frame : Int32
   inputs : Array[UInt64]
 } derive(Eq)
 
 ///|
 pub(all) struct ConfirmFrame {
-  frame : Int
+  frame : Int32
 } derive(Eq)
 
 ///|
 pub(all) struct ChecksumFrame {
-  frame : Int
+  frame : Int32
   hash : UInt64
 } derive(Eq)
 
@@ -31,18 +31,31 @@ pub(all) enum Message {
 } derive(Eq)
 
 ///|
-pub fn InputFrame::new(frame : Int, inputs : Array[UInt64]) -> InputFrame {
-  { frame, inputs }
+/// 显式声明 `derive(Eq)` 生成的方法提升为普通方法（消除 W0079）。
+pub extend InputFrame with Eq::{not_equal, equal}
+
+///|
+pub extend ConfirmFrame with Eq::{not_equal, equal}
+
+///|
+pub extend ChecksumFrame with Eq::{not_equal, equal}
+
+///|
+pub extend Message with Eq::{not_equal, equal}
+
+///|
+pub fn InputFrame::new(frame : Int32, inputs : Array[UInt64]) -> InputFrame {
+  { frame, inputs, }
 }
 
 ///|
-pub fn ConfirmFrame::new(frame : Int) -> ConfirmFrame {
+pub fn ConfirmFrame::new(frame : Int32) -> ConfirmFrame {
   { frame, }
 }
 
 ///|
-pub fn ChecksumFrame::new(frame : Int, hash : UInt64) -> ChecksumFrame {
-  { frame, hash }
+pub fn ChecksumFrame::new(frame : Int32, hash : UInt64) -> ChecksumFrame {
+  { frame, hash, }
 }
 
 ///|
@@ -56,7 +69,7 @@ fn put_varint(out : Array[Byte], v : UInt64) -> Unit {
 }
 
 ///|
-fn get_varint(buf : Bytes, start : Int) -> (UInt64, Int)? {
+fn get_varint(buf : Bytes, start : Int32) -> (UInt64, Int32)? {
   let mut x = 0UL
   let mut shift = 0
   let mut pos = start
@@ -82,7 +95,7 @@ fn put_u64(out : Array[Byte], v : UInt64) -> Unit {
 }
 
 ///|
-fn get_u64(buf : Bytes, pos : Int) -> UInt64? {
+fn get_u64(buf : Bytes, pos : Int32) -> UInt64? {
   if pos < 0 || pos + 8 > buf.length() {
     return None
   }
@@ -140,7 +153,7 @@ pub fn encode_batch(msgs : Array[Message]) -> Bytes {
 }
 
 ///|
-fn decode_at(buf : Bytes, start : Int) -> (Message, Int)? {
+fn decode_at(buf : Bytes, start : Int32) -> (Message, Int32)? {
   if start >= buf.length() {
     return None
   }
@@ -168,7 +181,7 @@ fn decode_at(buf : Bytes, start : Int) -> (Message, Int)? {
                 None => return None
               }
             }
-            Some((Input({ frame: frame.to_int(), inputs }), p))
+            Some((Input({ frame: frame.to_int(), inputs, }), p))
           }
           None => None
         }
@@ -176,7 +189,7 @@ fn decode_at(buf : Bytes, start : Int) -> (Message, Int)? {
     }
   } else if tag == 2 {
     match get_varint(buf, pos) {
-      Some((frame, p)) => Some((Confirm({ frame: frame.to_int() }), p))
+      Some((frame, p)) => Some((Confirm({ frame: frame.to_int(), }), p))
       None => None
     }
   } else if tag == 3 {
@@ -184,7 +197,7 @@ fn decode_at(buf : Bytes, start : Int) -> (Message, Int)? {
       Some((frame, p1)) =>
         match get_u64(buf, p1) {
           Some(hash) =>
-            Some((Checksum({ frame: frame.to_int(), hash }), p1 + 8))
+            Some((Checksum({ frame: frame.to_int(), hash, }), p1 + 8))
           None => None
         }
       None => None

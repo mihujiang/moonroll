@@ -109,6 +109,10 @@ pub impl @session.Sim for PhysSim with fn hash(self) {
 }
 
 ///|
+/// 显式声明方法提升（消除 W0079）。
+pub extend PhysSim with @session.Sim::{step, save, restore, hash}
+
+///|
 /// Read access for rendering.
 pub fn PhysSim::world(self : PhysSim) -> @moonphys.World {
   self.world

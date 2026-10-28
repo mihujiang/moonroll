@@ -36,7 +36,7 @@ impl @session.Sim for Demo with fn hash(self) -> UInt64 {
 }
 
 ///|
-fn input_of(frame : Int, salt : Int) -> UInt64 {
+fn input_of(frame : Int32, salt : Int32) -> UInt64 {
   (frame.to_uint64() * 2654435761UL + salt.to_uint64() * 97UL) & 0xFFUL
 }
 
@@ -88,8 +88,8 @@ fn main {
   // 4) 回滚会话：2 帧延迟下两个对等体跑 300 帧后状态一致
   let total = 300
   let delay = 2
-  let pa = @session.Session::with_window({ x: 0UL }, 0, 128)
-  let pb = @session.Session::with_window({ x: 0UL }, 1, 128)
+  let pa = @session.Session::with_window({ x: 0UL, }, 0, 128)
+  let pb = @session.Session::with_window({ x: 0UL, }, 1, 128)
   let mut f = 0
   while f < total {
     f = f + 1
@@ -128,8 +128,8 @@ fn main {
   let resend = 16
   let net_ab = @sim_net.NetSim::new(@sim_net.Link::new(6, 3, 0, 10, 20261028UL))
   let net_ba = @sim_net.NetSim::new(@sim_net.Link::new(6, 3, 0, 10, 777UL))
-  let na = @session.Session::with_window({ x: 0UL }, 0, 128)
-  let nb = @session.Session::with_window({ x: 0UL }, 1, 128)
+  let na = @session.Session::with_window({ x: 0UL, }, 0, 128)
+  let nb = @session.Session::with_window({ x: 0UL, }, 1, 128)
   let mut n = 0
   while n < total_net {
     n = n + 1
