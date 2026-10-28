@@ -212,8 +212,8 @@ InputSpan : [0x05][varint player][varint start][varint count][varint mask][varin
 - **不做反作弊**：64 位哈希只用于一致性探测，不防伪造；也没有延迟/输入频率分析。
 - **物理快照不支持关节**：`moonphys::World::load_state` 对含关节的世界直接拒绝
   （关节约束需要额外的求解器状态，当前没有序列化）。
-- **回滚深度未做上限自适应**：窗口固定 128 帧（约 2.1 秒），超过就退化为
-  「放弃回滚、直接接受分叉」。
+- **回滚深度未做上限自适应**：窗口默认 64 帧（`DEFAULT_WINDOW`，60 fps 下约 1.07 秒；
+  `Session::with_window` 可调，示例与 demo 用 128 帧），超过就退化为「放弃回滚、直接接受分叉」。
 
 ## 还没做的
 
