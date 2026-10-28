@@ -5,10 +5,14 @@
 MoonBit 生态里"把两个玩家连起来还不漂移"这一层是空白。
 `moonroll` 补的就是这一层：不绑定任何引擎的确定性回滚同步（rollback netcode）。
 
-**状态：V0.9（分叉恢复）**。定点数、状态哈希、每个玩家一条输入环、
+**状态：V1.0（可发布）**。定点数、状态哈希、每个玩家一条输入环、
 预测 / 确认 / 回滚重放、紧凑字节协议（含区间帧、变化掩码与全量状态帧）、确定性延迟 / 抖动 / 丢包 / 乱序模拟器，
 一个把两个 `moonphys` 物理世界连起来的可视化演示，以及七个 `moon run` 就能跑的示例
 （含四人对局重放成本对比、掉线前后确认帧走势对比、五种发包策略的带宽对比、分叉后的全量重同步）。
+
+**在线演示：[mihujiang.github.io/moonroll](https://mihujiang.github.io/moonroll/)** —— 浏览器里直接跑，
+拖延迟 / 抖动 / 丢包 / 乱序滑块，看两个物理世界回滚重放后重新贴合。
+
 `moon check --deny-warn` 与 `moon fmt --check` 在 CI 里全绿。
 
 设计取舍见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
@@ -340,6 +344,9 @@ node tools/check-demo.mjs
 python -m http.server --directory docs 8123
 ```
 
+推送到 `main` 后 `.github/workflows/pages.yml` 会把 `docs/` 整个目录发布到 GitHub Pages
+（`actions/configure-pages` 带 `enablement: true`，首次运行会自动打开 Pages，不用手点 Settings）。
+
 页面在 `docs/index.html` + `docs/app.js`，零外部依赖，导出全是数值 ABI：
 
 | 导出 | 作用 |
@@ -393,21 +400,32 @@ python -m http.server --directory docs 8123
 ## 验证
 
 ```bash
+# 一条命令跑完 CI 里 test + demo 两个 job 的全部门禁
+node tools/verify.mjs        # --quick 只跑 check / fmt / 双后端测试
+```
+
+它等价于下面这一串（CI 也是这个顺序）：
+
+```bash
 moon check --deny-warn     # 零警告
 moon fmt --check           # 格式一致
 moon test --target wasm-gc
 moon test --target js
-node tools/check-demo.mjs  # 1800 帧 wasm 自检
+moon build --target native
+for e in two_peer latency_chart desync_demo four_peer drop_out bandwidth resync; do
+  moon run "examples/$e"
+done
+node tools/check-demo.mjs  # 1800 帧 wasm 自检（提交的那份和刚构建的那份各跑一遍）
 ```
 
-CI（`.github/workflows/ci.yml`）跑的就是这一串，外加七个示例的冒烟，以及
-「提交的 `docs/engine.wasm` 和刚构建出来的 wasm 各跑一遍无头自检」。
-同一份源码在不同 moonc 版本 / 不同宿主上产出的字节并不相同，所以 CI 不比字节，
-只保证两份都能跑通（`tools/build-demo.ps1` 负责在本地重建并覆盖提交的那份）。
+`tools/verify.mjs` 在找不到 C 工具链（Windows 上的 MSVC Build Tools）时会把 native
+一步标成「跳过」而不是失败，其余步骤一视同仁。
 
-`moon.mod` 依赖 `weopqrst/moonphys`（demo 与 `adapters/phys` 用的物理引擎，还没发布到
-mooncakes registry），所以单独 clone 本仓库是构建不了的：要在父目录放一个 `moon.work`，
-把 `moonroll` 和 `moonphys` 都列为成员。CI 也是 checkout 两个兄弟仓库后生成同一个 workspace。
+`moon.mod` 依赖 `weopqrst/moonphys@0.2.2`（`demo` 与 `adapters/phys` 用的物理引擎）。
+它在 mooncakes 上有发布，但新版 moon 的 registry 索引里查不到这一条（只 checkout 本仓库
+时会报 `module was not found in the registry`），所以本地开发和 CI 都用兄弟仓库的
+workspace：父目录放一个 `moon.work`，把 `moonroll` 和 `moonphys` 都列为成员。
+CI 是 checkout 两个仓库后生成同一份 `moon.work`。
 
 166 个测试，两个后端全绿。核心断言：
 
@@ -451,6 +469,18 @@ mooncakes registry），所以单独 clone 本仓库是构建不了的：要在�
 - **resync 示例：无丢包时一次往返修好（失配帧 = 事故帧 = 恢复点）；4% 丢包下靠重试
   收敛；干净局与事故帧在收尾之后的局重同步次数都是 0。**
 
+## 发布到 mooncakes
+
+```bash
+moon login                        # 只需一次，token 落在 ~/.moon/credentials.json
+node tools/publish.mjs --dry-run  # 版本号比对 + 打包，不上传
+node tools/publish.mjs            # 打包 + moon publish
+```
+
+`tools/publish.mjs` 先拿 `moon.mod` 的版本去 registry 上比：比当前最新版本旧就直接拒绝，
+免得白跑一趟（mooncakes 的版本号不能复用）；然后 `moon package` 确认模块自洽，
+最后用同一份内容上传。`--dry-run` 只做到打包为止。
+
 ## Roadmap
 
 - **V0.1** 基础层：定点数、状态哈希、输入环（已完成）
@@ -461,8 +491,8 @@ mooncakes registry），所以单独 clone 本仓库是构建不了的：要在�
 - **V0.6** 1..8 人同局：每玩家一条输入环、`step_players` 接入、协议带玩家索引、四人对局示例（已完成）
 - **V0.7** 掉线语义：在线集合、确认帧只等在线玩家、重连不回退、协议 `Active` 帧、掉线示例（已完成）
 - **V0.8** 带宽：`InputSpan` 区间帧 + 变化掩码、对端水位自适应重发、校验和降频、带宽示例（已完成）
-- **V0.9** 分叉恢复：`export_state` / `resync_from`、`Snap` / `SnapAsk` 帧、重同步示例（当前）
-- **V1.0** GitHub Pages 在线演示、验收脚本、mooncakes 发布
+- **V0.9** 分叉恢复：`export_state` / `resync_from`、`Snap` / `SnapAsk` 帧、重同步示例（已完成）
+- **V1.0** GitHub Pages 在线演示、一键验收脚本、mooncakes 发布（已完成）
 
 ## 明确不做
 

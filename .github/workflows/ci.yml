@@ -83,6 +83,11 @@ jobs:
         working-directory: moonroll
         run: moon build --target native
 
+      # 发布前的最后一道保险：模块必须能自己打包（不联网，只校验自洽）
+      - name: package
+        working-directory: moonroll
+        run: moon package
+
       - name: examples
         working-directory: moonroll
         run: |

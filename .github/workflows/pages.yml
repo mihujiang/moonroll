@@ -1,0 +1,43 @@
+name: Pages
+
+# 在线演示：docs/ 里是纯静态页面 + 预编译好的 engine.wasm，直接整目录发布。
+# 不在 Pages 流程里重新编译 wasm —— 提交的产物由 CI 的 demo job 校验过行为
+# （selftest），这样部署稳定、和 README 里贴的输出一致。
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # enablement: true 让首次运行时自动把仓库的 Pages source 设成 GitHub Actions，
+      # 省掉一次手动进 Settings 的步骤。
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

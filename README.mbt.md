@@ -5,10 +5,12 @@
 MoonBit 生态里 ECS、物理、寻路、渲染、行为树都已经有人做，但"把两个玩家连起来还不漂移"这一层是空白。
 `moonroll` 补的就是这一层：不绑定任何引擎的确定性回滚同步（rollback netcode）。
 
-**状态：V0.9（分叉恢复）**。定点数、状态哈希、输入环、预测 / 确认 / 回滚重放、
+**状态：V1.0**。定点数、状态哈希、输入环、预测 / 确认 / 回滚重放、
 紧凑字节协议（区间帧 + 变化掩码 + 全量状态帧）、确定性延迟 / 抖动 / 丢包 / 乱序模拟器，
 一个把两个 `moonphys` 物理世界连起来的可视化演示，以及七个 `moon run` 就能跑的示例
 （含四人对局重放成本对比、掉线走势对比、五种发包策略的带宽对比、分叉后的全量重同步）。
+
+在线演示（浏览器里直接跑）：<https://mihujiang.github.io/moonroll/>
 
 设计取舍见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
 
@@ -185,6 +187,8 @@ node tools/check-demo.mjs     # 无头验收：1800 帧、200ms 延迟、50ms �
 python -m http.server --directory docs 8123   # 打开 http://localhost:8123/
 ```
 
+在线版就是 `docs/` 目录本身，由 `.github/workflows/pages.yml` 在每次推送后发布。
+
 页面零外部依赖，导出全是数值 ABI（`mr_reset` / `mr_step` / `mr_confirmed` /
 `mr_rollbacks` / `mr_desync` / `mr_synced` / `mr_hash_lo|hi` / `mr_body_*` / `mr_selftest`）。
 左侧与右侧分别是两个玩家眼中的世界，同色虚线框是对端眼中的同一物体：延迟拉大时暂时错开，
@@ -229,9 +233,7 @@ python -m http.server --directory docs 8123   # 打开 http://localhost:8123/
 ## 验证
 
 ```bash
-moon test --target wasm-gc
-moon test --target js
-moon run cmd/main --target wasm-gc
+node tools/verify.mjs    # check + fmt + 双后端测试 + native + 七个示例 + demo 自检
 ```
 
 166 个测试，两个后端全绿；`moon check --deny-warn` 与 `moon fmt --check` 在 CI 里全绿。核心断言：
@@ -270,8 +272,8 @@ moon run cmd/main --target wasm-gc
 - **V0.6** 1..8 人同局：每玩家一条输入环、`step_players` 接入、协议带玩家索引、四人对局示例（已完成）
 - **V0.7** 掉线语义：在线集合、确认帧只等在线玩家、重连不回退、协议 `Active` 帧、掉线示例（已完成）
 - **V0.8** 带宽：`InputSpan` 区间帧 + 变化掩码、对端水位自适应、校验和降频、带宽示例（已完成）
-- **V0.9** 分叉恢复：`export_state` / `resync_from`、`Snap` / `SnapAsk` 帧、重同步示例（当前）
-- **V1.0** CI 三后端一致性、文档、mooncakes 发布
+- **V0.9** 分叉恢复：`export_state` / `resync_from`、`Snap` / `SnapAsk` 帧、重同步示例（已完成）
+- **V1.0** GitHub Pages 在线演示、一键验收脚本、mooncakes 发布（已完成）
 
 ## 明确不做
 
