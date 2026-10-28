@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   test:
@@ -15,13 +16,28 @@ jobs:
         with:
           node-version: "22"
 
+      # 固定工具链版本：latest 会漂移，上游改了 moon / core 的搭配方式就会在
+      # 「代码没动」的情况下变红。固定版本拉不到时回退 latest，并留下 annotation。
       - name: Install MoonBit
         run: |
-          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          set -o pipefail
+          PIN=0.1.20261021
+          if ! curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash -s -- "$PIN"; then
+            echo "::warning::pinned MoonBit $PIN unavailable, falling back to latest"
+            curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          fi
           echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
 
       - name: moon version
-        run: moon version && moonc version
+        run: |
+          which -a moon moonc || true
+          ls -l "$HOME/.moon/bin" || true
+          if ! out=$("$HOME/.moon/bin/moon" version --all 2>&1); then
+            printf '%s\n' "$out"
+            echo "::error::moon version failed: $(printf '%s' "$out" | tr '\n' '|' | head -c 2000)"
+            exit 1
+          fi
+          printf '%s\n' "$out"
 
       - name: check
         run: moon check --deny-warn
@@ -59,11 +75,17 @@ jobs:
 
       - name: Install MoonBit
         run: |
-          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          set -o pipefail
+          PIN=0.1.20261021
+          if ! curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash -s -- "$PIN"; then
+            echo "::warning::pinned MoonBit $PIN unavailable, falling back to latest"
+            curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          fi
           echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
 
       - name: build demo wasm
         run: |
+          export PATH="$HOME/.moon/bin:$PATH"
           moon build --target wasm-gc --release
           wasm=$(find _build -path '*demo/demo.wasm' | head -n 1)
           test -n "$wasm"
