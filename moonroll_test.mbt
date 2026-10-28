@@ -2,7 +2,7 @@
 
 ///|
 test "aggregated exports are usable" {
-  assert_eq(@moonroll.version(), "0.1.0")
+  assert_eq(@moonroll.version(), "0.2.0")
   let two = @moonroll.Fixed::from_int(2)
   assert_eq(two.to_double(), 2.0)
   let s = two.sqrt().to_double()

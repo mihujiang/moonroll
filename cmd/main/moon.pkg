@@ -3,8 +3,7 @@ import {
   "weopqrst/moonroll/fixed",
   "weopqrst/moonroll/digest",
   "weopqrst/moonroll/input",
+  "weopqrst/moonroll/session",
 }
 
-options(
-  "is-main": true,
-)
+pkgtype(kind: "executable")
