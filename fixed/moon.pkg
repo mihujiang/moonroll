@@ -1,1 +1,5 @@
 // no external imports
+
+import {
+  "moonbitlang/core/math",
+} for "test"

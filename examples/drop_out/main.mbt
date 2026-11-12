@@ -189,7 +189,7 @@ pub fn run(announce_drop : Bool, total : Int32, verbose : Bool) -> DropStats {
     if !decided && announce_drop && f - heard[GONE_PLAYER] > TIMEOUT {
       decided = true
       declared_at = f
-      ignore(sessions[0].set_player_active(GONE_PLAYER, false))
+      ignore(sessions[0].set_player_active_at(GONE_PLAYER, false, 200))
     }
     let mut back = f - RESEND + 1
     if back < 1 {

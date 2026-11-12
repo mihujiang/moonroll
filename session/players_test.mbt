@@ -218,6 +218,150 @@ test "player count and local id are clamped" {
 }
 
 ///|
+/// 掉线声明与迟到输入的处理顺序不应改变最终世界状态。
+///
+/// 两端看到的事件相同（玩家 2 的输入只到 21、随后掉线、22 的迟到输入到达），
+/// 但处理顺序相反：一端是「掉线声明 -> 迟到输入」，另一端是「迟到输入 -> 掉线声明」。
+/// 两端最终的输入环、在线集合、确认帧完全一致，历史哈希也必须一致。
+test "drop declaration vs late input order must not fork" {
+  let n : Int32 = 3
+  let s = make_crowd(n, 64)
+  let dead : Int32 = 2
+  let cut : Int32 = 21
+  let mut f = 0
+  while f < 30 {
+    f = f + 1
+    let mut k = 0
+    while k < n {
+      let mut j = 0
+      while j < n {
+        if j != k && !(j == dead && f > cut) {
+          s[k].receive_from(j, f, crowd_input(f, j))
+        }
+        j = j + 1
+      }
+      k = k + 1
+    }
+    let mut k2 = 0
+    while k2 < n {
+      ignore(s[k2].advance(crowd_input(f, k2)))
+      k2 = k2 + 1
+    }
+  }
+  let late = crowd_input(cut + 1, dead)
+  // 掉线结算点由房主宣布并广播，两端用同一个帧号
+  let at : Int32 = 25
+  // 端点 0：掉线声明先到，迟到输入后到
+  ignore(s[0].set_player_active_at(dead, false, at))
+  s[0].receive_from(dead, cut + 1, late)
+  // 端点 1：迟到输入先到，掉线声明后到
+  s[1].receive_from(dead, cut + 1, late)
+  ignore(s[1].set_player_active_at(dead, false, at))
+  // 对外可见的状态必须一致
+  assert_eq(s[0].confirmed(), s[1].confirmed())
+  assert_eq(s[0].is_active(dead), s[1].is_active(dead))
+  assert_true(s[0].player_input(dead, cut + 1) is Some(v) && v == late)
+  assert_true(s[1].player_input(dead, cut + 1) is Some(v) && v == late)
+  // 世界状态必须一致（顺序敏感时会在这里永久分叉）
+  let mut f2 = cut + 1
+  while f2 <= 30 {
+    assert_eq(s[0].hash_at(f2), s[1].hash_at(f2))
+    f2 = f2 + 1
+  }
+}
+
+///|
+/// 结算点之后的迟到输入必须被丢弃：那一段历史里该玩家已经不在线。
+///
+/// 与上一条测试相反，这里迟到输入的帧号**晚于**结算点（`26 > 25`），
+/// 走的是 `receive_from` 里 `frame > at_frame` 的丢弃分支——它必须既不改
+/// 输入环，也不改历史哈希。
+test "late input after the cut frame is dropped" {
+  let n : Int32 = 3
+  let s = make_crowd(n, 64)
+  let dead : Int32 = 2
+  let cut : Int32 = 25
+  let mut f = 0
+  while f < 30 {
+    f = f + 1
+    let mut k = 0
+    while k < n {
+      let mut j = 0
+      while j < n {
+        if j != k && !(j == dead && f > cut) {
+          s[k].receive_from(j, f, crowd_input(f, j))
+        }
+        j = j + 1
+      }
+      k = k + 1
+    }
+    let mut k2 = 0
+    while k2 < n {
+      ignore(s[k2].advance(crowd_input(f, k2)))
+      k2 = k2 + 1
+    }
+  }
+  // 结算点就是 2 号最后发出输入的那一帧
+  ignore(s[0].set_player_active_at(dead, false, cut))
+  let before_hash = s[0].hash_at(30)
+  let before_confirmed = s[0].confirmed()
+  // 26、27 帧的输入在结算点之后才到：视同不存在
+  s[0].receive_from(dead, cut + 1, crowd_input(cut + 1, dead))
+  s[0].receive_from(dead, cut + 2, crowd_input(cut + 2, dead))
+  assert_eq(s[0].player_input(dead, cut + 1), None)
+  assert_eq(s[0].player_input(dead, cut + 2), None)
+  assert_eq(s[0].hash_at(30), before_hash)
+  assert_eq(s[0].confirmed(), before_confirmed)
+}
+
+///|
+/// 结算点滑出快照窗口时退化成「只封顶未来输入」：不回退、不重放，
+/// 但两端按同样规则退化，仍然不分叉。
+///
+/// 这个分支的判据只有 `at` / `frame` / `window`，与输入到达顺序无关；
+/// 测试用两个独立会话对同一个 `at` 各算一次，比对确认帧与逐帧哈希。
+test "cut frame older than the window degrades without forking" {
+  let n : Int32 = 3
+  let s = make_crowd(n, 8)
+  let dead : Int32 = 2
+  let mut f = 0
+  while f < 40 {
+    f = f + 1
+    let mut k = 0
+    while k < n {
+      let mut j = 0
+      while j < n {
+        if j != k && !(j == dead && f > 10) {
+          s[k].receive_from(j, f, crowd_input(f, j))
+        }
+        j = j + 1
+      }
+      k = k + 1
+    }
+    let mut k2 = 0
+    while k2 < n {
+      ignore(s[k2].advance(crowd_input(f, k2)))
+      k2 = k2 + 1
+    }
+  }
+  let stale = s[0].confirmed()
+  let rb = s[0].rollbacks()
+  // `at = 2` 早于 `frame - window = 32`，只能走退化分支
+  ignore(s[0].set_player_active_at(dead, false, 2))
+  ignore(s[1].set_player_active_at(dead, false, 2))
+  // 退化：确认帧不回退（掉线玩家被排除后只会前进），也不产生额外回滚/重放
+  assert_true(s[0].confirmed() >= stale)
+  assert_eq(s[0].rollbacks(), rb)
+  assert_eq(s[0].rollbacks(), s[1].rollbacks())
+  assert_eq(s[0].confirmed(), s[1].confirmed())
+  let mut f2 = 1
+  while f2 <= 40 {
+    assert_eq(s[0].hash_at(f2), s[1].hash_at(f2))
+    f2 = f2 + 1
+  }
+}
+
+///|
 test "single player session confirms every frame" {
   let s = @session.Session::with_players({ v: 0UL, }, 1, 0, 16)
   let mut f = 0

@@ -6,7 +6,7 @@ MoonBit 生态里"把两个玩家连起来还不漂移"这一层是空白。
 `moonroll` 补的就是这一层：不绑定任何引擎的确定性回滚同步（rollback netcode）。
 
 **状态：V1.0（功能完备）**。定点数、状态哈希、每个玩家一条输入环、
-预测 / 确认 / 回滚重放、紧凑字节协议（含区间帧、变化掩码与全量状态帧）、确定性延迟 / 抖动 / 丢包 / 乱序模拟器，
+预测 / 确认 / 回滚重放、紧凑字节协议（含区间帧、变化掩码与全量状态帧）、确定性延迟 / 抖动 / 丢包 / 乱序 / 带宽模拟器，
 一个把两个 `moonphys` 物理世界连起来的可视化演示，以及七个 `moon run` 就能跑的示例
 （含四人对局重放成本对比、掉线前后确认帧走势对比、五种发包策略的带宽对比、分叉后的全量重同步）。
 
@@ -213,10 +213,20 @@ for packet in net.recv(frame) { /* ... */ } // 到达的包，按到达时间排
 net.delivered()  // 已交付包数
 net.dropped()    // 丢弃包数
 net.in_flight()  // 在途包数
+
+// 上行带宽：每帧最多通过 40 字节，同一帧内的多个包共用这份预算
+let capped = @sim_net.NetSim::new(
+  @sim_net.Link::with_bandwidth(delay, jitter, loss_pct, reorder_pct, seed, 40),
+)
+capped.send(frame, payload)  // 超预算整包丢弃
+capped.throttled()           // 因超预算被丢弃的包数
 ```
 
 时间单位是逻辑帧（60fps 下 1 帧 ≈ 16.7ms），内部是确定性 LCG：
 **同 seed、同发送序列必然得到同到达序列**，所以整条链路可以进单元测试和 fuzz。
+带宽判定排在丢包/抖动/乱序之后，也不消耗随机流，因此给同一条链路加预算
+不会打乱既有的丢包与到达顺序——`examples/bandwidth` 最后一段就是拿 40 字节预算
+把「每帧固定重发 16 帧」卡死、而区间帧照常跑满的对拍。
 
 ## 七个 `moon run` 就能跑的示例
 
@@ -392,7 +402,7 @@ python -m http.server --directory docs 8123
 
 | 包 | 内容 | 状态 |
 | --- | --- | --- |
-| `weopqrst/moonroll/fixed` | Q16.16 定点数（`+ - * /`、开方、lerp、clamp） | V0.1 |
+| `weopqrst/moonroll/fixed` | Q16.16 定点数（`+ - * /`、开方、`sin/cos` 查表、lerp、clamp） | V0.1 |
 | `weopqrst/moonroll/digest` | FNV-1a 64 状态哈希 | V0.1 |
 | `weopqrst/moonroll/input` | 帧号 -> 输入位图的环形缓冲 | V0.1 |
 | `weopqrst/moonroll/session` | `Sim` 协议 + 预测 / 确认 / 回滚重放 / 历史哈希 + 1..8 人会话 + 掉线语义 + 对端水位 + 分叉重同步 | V0.2 |
@@ -439,7 +449,7 @@ node tools/check-demo.mjs  # 1800 帧 wasm 自检（提交的那份和刚构建�
 workspace：父目录放一个 `moon.work`，把 `moonroll` 和 `moonphys` 都列为成员。
 CI 是 checkout 两个仓库后生成同一份 `moon.work`。
 
-166 个测试，两个后端全绿。核心断言：
+173 个测试，两个后端全绿。核心断言：
 
 - 定点数与 `Double` 对拍误差不超过 4 个 LSB；
 - FNV-1a 64 对 `"hello"` 命中标准向量 `0xa430d84680aabd0b`；

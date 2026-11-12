@@ -83,3 +83,45 @@ test "jitter produces out of order arrival" {
   }
   assert_true(inversions > 0)
 }
+
+///|
+test "zero bandwidth means unlimited" {
+  let net = NetSim::new(Link::new(0, 0, 0, 0, 1UL))
+  net.send(0, Bytes::makei(4096, fn(_) { 0 }))
+  assert_eq(net.throttled(), 0)
+  assert_eq(net.recv(0).length(), 1)
+}
+
+///|
+test "bandwidth budget is shared inside one frame" {
+  let net = NetSim::new(Link::with_bandwidth(0, 0, 0, 0, 1UL, 100))
+  net.send(0, Bytes::make(80, 0))
+  // 同一帧只剩 20 字节：40 字节的包被限流丢弃
+  net.send(0, Bytes::make(40, 0))
+  // 下一帧预算重置，20 字节能过
+  net.send(1, Bytes::make(20, 0))
+  assert_eq(net.throttled(), 1)
+  assert_eq(net.dropped(), 0)
+  let a = net.recv(0)
+  let b = net.recv(1)
+  assert_eq(a.length(), 1)
+  assert_eq(b.length(), 1)
+}
+
+///|
+test "throttling does not perturb the loss stream" {
+  // 限流发生在随机判定之后：同样 seed 的两条链路，一条有 1 字节预算（几乎全被限流），
+  // 一条不限流，丢包次数必须一致——否则「加预算」会悄悄改掉整局的重放节奏。
+  let unlimited = NetSim::new(Link::new(2, 3, 10, 20, 9UL))
+  let capped = NetSim::new(Link::with_bandwidth(2, 3, 10, 20, 9UL, 1))
+  let mut t = 0
+  while t < 20 {
+    unlimited.send(t, Bytes::make(10, 0))
+    capped.send(t, Bytes::make(10, 0))
+    t = t + 1
+  }
+  assert_true(capped.throttled() > 0)
+  assert_eq(unlimited.dropped(), capped.dropped())
+  // 通过随机判定的包要么上线（unlimited）要么被预算吃掉（capped），总数守恒。
+  assert_eq(unlimited.dropped() + capped.throttled(), 20)
+}

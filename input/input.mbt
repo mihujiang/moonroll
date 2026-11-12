@@ -59,3 +59,18 @@ pub fn InputRing::get(self : InputRing, frame : Int32) -> UInt64? {
 pub fn InputRing::has(self : InputRing, frame : Int32) -> Bool {
   self.get(frame) is Some(_)
 }
+
+///|
+/// 清除某一帧的输入。
+///
+/// 掉线结算时用：某个玩家在「最后有效帧」之后到达的输入必须作废，
+/// 否则两端会因为这一帧的迟到包而长期不一致。
+pub fn InputRing::clear(self : InputRing, frame : Int32) -> Bool {
+  let i = self.slot(frame)
+  if self.frames[i] == frame {
+    self.frames[i] = -1
+    true
+  } else {
+    false
+  }
+}

@@ -6,6 +6,9 @@ pub(all) struct Link {
   loss_pct : Int32
   reorder_pct : Int32
   seed : UInt64
+  /// 每帧允许通过的最大字节数，0 表示不限。
+  /// 超出预算的包直接丢弃并计入 `throttled`，模拟上行带宽被占满。
+  bandwidth : Int32
 }
 
 ///|
@@ -42,7 +45,22 @@ pub fn Link::new(
       reorder_pct
     },
     seed,
+    bandwidth: 0,
   }
+}
+
+///|
+/// 带带宽上限的构造：每帧最多通过 `bandwidth` 字节，0 表示不限。
+pub fn Link::with_bandwidth(
+  delay : Int32,
+  jitter : Int32,
+  loss_pct : Int32,
+  reorder_pct : Int32,
+  seed : UInt64,
+  bandwidth : Int32,
+) -> Link {
+  let link = Link::new(delay, jitter, loss_pct, reorder_pct, seed)
+  { ..link, bandwidth: if bandwidth < 0 { 0 } else { bandwidth }, }
 }
 
 ///|
@@ -59,11 +77,23 @@ pub struct NetSim {
   mut queue : Array[Packet]
   mut delivered : Int32
   mut dropped : Int32
+  mut throttled : Int32
+  mut budget_frame : Int32
+  mut budget_left : Int32
 }
 
 ///|
 pub fn NetSim::new(link : Link) -> NetSim {
-  { link, seed: link.seed, queue: [], delivered: 0, dropped: 0, }
+  {
+    link,
+    seed: link.seed,
+    queue: [],
+    delivered: 0,
+    dropped: 0,
+    throttled: 0,
+    budget_frame: -2147483648,
+    budget_left: 0,
+  }
 }
 
 ///|
@@ -75,6 +105,8 @@ fn NetSim::rand(self : NetSim) -> Int32 {
 ///|
 /// 在 `now` 时刻发出一个包。可能被丢弃，否则按 delay + jitter 到达。
 pub fn NetSim::send(self : NetSim, now : Int32, payload : Bytes) -> Unit {
+  // 随机判定（丢包 / 抖动 / 乱序）放在带宽之前：带宽只决定「已经上线的包装不装得下」，
+  // 不改变这条链路的随机流，所以给链路加预算不会打乱既有的丢包与到达顺序。
   if self.link.loss_pct > 0 && self.rand() % 100 < self.link.loss_pct {
     self.dropped = self.dropped + 1
     return
@@ -85,6 +117,19 @@ pub fn NetSim::send(self : NetSim, now : Int32, payload : Bytes) -> Unit {
   }
   if self.link.reorder_pct > 0 && self.rand() % 100 < self.link.reorder_pct {
     d = d + 1
+  }
+  // 带宽预算按「发送时刻」重置：同一帧内的多个包共用一份预算。
+  if self.link.bandwidth > 0 {
+    if now != self.budget_frame {
+      self.budget_frame = now
+      self.budget_left = self.link.bandwidth
+    }
+    let n = payload.length()
+    if n > self.budget_left {
+      self.throttled = self.throttled + 1
+      return
+    }
+    self.budget_left = self.budget_left - n
   }
   self.queue.push({ arrive_at: now + d, payload, })
 }
@@ -130,6 +175,12 @@ pub fn NetSim::delivered(self : NetSim) -> Int32 {
 ///|
 pub fn NetSim::dropped(self : NetSim) -> Int32 {
   self.dropped
+}
+
+///|
+/// 因超出每帧字节预算而被丢弃的包数。
+pub fn NetSim::throttled(self : NetSim) -> Int32 {
+  self.throttled
 }
 
 ///|

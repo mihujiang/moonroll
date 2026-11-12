@@ -94,3 +94,40 @@ test "comparisons" {
   assert_true(a == @fixed.Fixed::from_int(1))
   assert_true(a != b)
 }
+
+///|
+test "sin and cos match double across the circle" {
+  let mut i = 0
+  while i < 64 {
+    let x = i.to_double() * 0.37 - 8.0
+    let f = @fixed.Fixed::from_double(x)
+    assert_true(close(f.sin().to_double(), @math.sin(x), 2.0 / 65536.0))
+    assert_true(close(f.cos().to_double(), @math.cos(x), 2.0 / 65536.0))
+    i += 1
+  }
+}
+
+///|
+test "sin and cos at cardinal angles" {
+  let half_pi = 1.5707963267948966
+  let pi = 3.141592653589793
+  let eps = 2.0 / 65536.0
+  assert_true(close(@fixed.Fixed::from_double(0.0).sin().to_double(), 0.0, eps))
+  assert_true(
+    close(@fixed.Fixed::from_double(half_pi).sin().to_double(), 1.0, eps),
+  )
+  assert_true(close(@fixed.Fixed::from_double(pi).sin().to_double(), 0.0, eps))
+  assert_true(
+    close(@fixed.Fixed::from_double(-half_pi).sin().to_double(), -1.0, eps),
+  )
+  assert_true(close(@fixed.Fixed::from_double(0.0).cos().to_double(), 1.0, eps))
+  assert_true(close(@fixed.Fixed::from_double(pi).cos().to_double(), -1.0, eps))
+}
+
+///|
+test "sin is bit-identical for the same input" {
+  // 纯整数实现：同一输入重复调用必须逐位相同
+  let a = @fixed.Fixed::from_double(1234.5).sin()
+  let b = @fixed.Fixed::from_double(1234.5).sin()
+  assert_eq(a.raw(), b.raw())
+}

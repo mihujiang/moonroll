@@ -39,6 +39,12 @@ pub struct Session[T] {
   /// 每个玩家是否在线。掉线的玩家保留槽位（模拟器仍然需要 N 路输入），
   /// 但不再参与确认帧的推进。
   active : Array[Bool]
+  /// 每个玩家**有效的最后一帧输入**（掉线结算点）。
+  ///
+  /// 在线时为 `INT32_MAX`，表示不设上限。掉线时把它钉在掉线声明给出的那一帧：
+  /// 该帧之后的输入一律作废。这一条是「掉线声明与迟到输入任意顺序到达都不分叉」
+  /// 的关键——判据只依赖帧号，不依赖事件到达顺序。
+  at_frame : Array[Int32]
   /// 每个对端最近一次**声明的确认帧**（来自它的 `Confirm` 包）。
   ///
   /// 只用于算「重新发送从哪里开始」：对方已经确认过的帧不必再发。
@@ -100,11 +106,13 @@ pub fn[T : Sim] Session::with_players(
   }
   let cont : Array[Int32] = []
   let active : Array[Bool] = []
+  let at_frame : Array[Int32] = []
   let heard : Array[Int32] = []
   let mut k = 0
   while k < n {
     cont.push(0)
     active.push(true)
+    at_frame.push(2147483647)
     heard.push(0)
     k = k + 1
   }
@@ -133,6 +141,7 @@ pub fn[T : Sim] Session::with_players(
     rings,
     cont,
     active,
+    at_frame,
     heard,
     buf: Array::make(n, 0UL),
     snaps,
@@ -185,10 +194,36 @@ pub fn[T] Session::online_count(self : Session[T]) -> Int32 {
 /// 这对所有对等体都是同一套确定性规则，因此不会引入分叉。
 ///
 /// 两种调用会被安全忽略：把本地玩家标成掉线；把最后一名在线玩家标成掉线。
-pub fn[T] Session::set_player_active(
+pub fn[T : Sim] Session::set_player_active(
   self : Session[T],
   player : Int32,
   on : Bool,
+) -> Bool {
+  if player < 0 || player >= self.num_players {
+    return false
+  }
+  // 兼容入口：掉线时把「该玩家最后连续收到的那一帧」当作有效上限。
+  // 各端自己算出的 `cont` 可能不同（一端可能已经收到某个迟到包），
+  // 需要严格一致时请改用 `set_player_active_at` 并广播同一个帧号。
+  let at = if on { 0 } else { self.cont[player] }
+  self.set_player_active_at(player, on, at)
+}
+
+///|
+/// 声明玩家掉线，并显式给出**该玩家输入的最后有效帧** `at`
+/// （房主宣布掉线时应当把当时的帧号一并广播）。
+///
+/// 判定只依赖帧号，不依赖事件到达顺序：
+/// - `frame <= at` 的输入始终有效，哪怕它在掉线声明之后才到，也会触发重放；
+/// - `frame > at` 的输入一律作废，已经收到的会被清除，并把世界重放回去。
+///
+/// 两端使用同一个 `at` 时，「先掉线后收迟到输入」与「先收迟到输入后掉线」
+/// 得到完全相同的历史哈希。
+pub fn[T : Sim] Session::set_player_active_at(
+  self : Session[T],
+  player : Int32,
+  on : Bool,
+  at : Int32,
 ) -> Bool {
   if player < 0 || player >= self.num_players {
     return false
@@ -202,11 +237,47 @@ pub fn[T] Session::set_player_active(
   if !on && self.online_count() <= 1 {
     return false
   }
-  self.active[player] = on
-  if on && self.cont[player] < self.confirmed {
-    // 掉线期间的输入永远不会补到齐：把连续指针抬到当前确认帧，
-    // 该玩家从这之后重新贡献输入，确认帧不会因此回退。
-    self.cont[player] = self.confirmed
+  if on {
+    self.active[player] = true
+    self.at_frame[player] = 2147483647
+    if self.cont[player] < self.confirmed {
+      // 掉线期间的输入永远不会补到齐：把连续指针抬到当前确认帧，
+      // 该玩家从这之后重新贡献输入，确认帧不会因此回退。
+      self.cont[player] = self.confirmed
+    }
+    self.update_confirmed()
+    return true
+  }
+  let mut limit = if at < 0 {
+    0
+  } else if at > self.frame {
+    self.frame
+  } else {
+    at
+  }
+  // 结算点已经出了快照窗口就无法回退重放；退而求其次只封顶未来的输入。
+  // 这个分支只看 `at`/`frame`/`window`，两端算出同样结果，不会分叉。
+  if limit < self.frame - self.window {
+    limit = self.frame
+  }
+  self.active[player] = false
+  self.at_frame[player] = limit
+  // 掉线前这些帧本来就没有输入时（正常掉线：指针之外全是预测值），
+  // 删除是个空操作，回退重放也改变不了任何状态，直接跳过省掉一次全窗口重算。
+  let mut removed = false
+  let mut f = limit + 1
+  while f <= self.frame {
+    if self.rings[player].clear(f) {
+      removed = true
+    }
+    f = f + 1
+  }
+  let rewind = self.cont[player] > limit
+  if rewind {
+    self.cont[player] = limit
+  }
+  if (removed || rewind) && limit < self.frame {
+    self.replay_from(limit)
   }
   self.update_confirmed()
   true
@@ -434,13 +505,27 @@ pub fn[T : Sim] Session::receive_from(
   if frame < self.frame - self.window * 2 {
     return
   }
+  // 掉线结算之后的**过去帧**一律作废。判据只看帧号，与「这一包比掉线声明早
+  // 到还是晚到」无关，所以两端按不同顺序收到同样一组事件会得到同样结果。
+  //
+  // 只拦 `frame < self.frame`：`frame >= self.frame` 的包说明对方正在恢复发包
+  // （断网期间不可能再产生新帧），即使上线声明还没到也不能丢，否则未收到声明
+  // 的一端会与已经重连的一端分叉。
+  if !self.active[player] && frame > self.at_frame[player] && frame < self.frame {
+    return
+  }
   self.rings[player].set(frame, remote_input)
   let mut c = self.cont[player]
   while self.rings[player].has(c + 1) {
     c = c + 1
   }
   self.cont[player] = c
-  if frame <= self.frame && frame > self.confirmed {
+  // 在线玩家按「确认帧之前的输入本该到齐」来省开销：确认帧上还会到的只可能
+  // 是重传包，上面的重复检查已经挡掉。
+  //
+  // 掉线玩家不同：它的有效输入（`frame <= at`）可能在声明之后才到，而另一端
+  // 可能已经用它重放过；这里漏一次，两端就会永久分叉。
+  if frame <= self.frame && (frame > self.confirmed || !self.active[player]) {
     self.replay_from(frame - 1)
   }
   self.update_confirmed()
@@ -490,20 +575,23 @@ fn[T : Sim] Session::simulate(self : Session[T], frame : Int32) -> Unit {
 
 ///|
 fn[T : Sim] Session::replay_from(self : Session[T], base : Int32) -> Unit {
+  // 这个判断只看 `frame` 与 `window`，两端取值相同，不会造成「一端重放、
+  // 另一端放弃」；窗口外的帧重复到达本来也只会是同一批被丢弃的包。
   if base < self.frame - self.window {
     return
   }
-  match self.snaps.get(base) {
+  let b = base
+  match self.snaps.get(b) {
     None => ()
     Some(bytes) => {
       self.sim.restore(bytes)
-      let mut f = base + 1
+      let mut f = b + 1
       while f <= self.frame {
         self.simulate(f)
         f = f + 1
       }
       self.rollbacks = self.rollbacks + 1
-      let depth = self.frame - base
+      let depth = self.frame - b
       self.replayed = self.replayed + depth.to_int64()
       if depth > self.max_depth {
         self.max_depth = depth

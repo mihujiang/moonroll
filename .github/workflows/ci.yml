@@ -6,11 +6,11 @@ on:
   pull_request:
   workflow_dispatch:
 
-# moonroll 的 demo 与 adapters/phys 依赖物理引擎 weopqrst/moonphys，而后者还没有
-# 发布到 mooncakes registry：单独 checkout moonroll 时 `moon check` 会在解析依赖图
-# 这一步就失败（"module was not found in the registry"）。
-# CI 因此 checkout 两个兄弟仓库再生成与本地一致的 moon.work —— 本地开发也是这样。
-# 版本固定到具体 commit，避免对方主线漂移让本仓库莫名其妙变红。
+# moonroll 的 demo 与 adapters/phys 依赖物理引擎 weopqrst/moonphys。它已经在
+# mooncakes 上有版本（当前 moon.mod 依赖 0.2.2），但 demo 需要与本地开发完全一致的
+# 源码，且要避免对方主线漂移让本仓库莫名其妙变红，所以 CI 仍然 checkout 兄弟仓库
+# 再生成与本地一致的 moon.work —— 本地开发也是这样。
+# 版本固定到具体 commit。
 env:
   MOONPHYS_REPO: mihujiang/moonphys
   MOONPHYS_REF: "13df95834be4b15778fa88a57d99ef7d9f7d1213"

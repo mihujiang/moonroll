@@ -6,7 +6,7 @@ MoonBit 生态里 ECS、物理、寻路、渲染、行为树都已经有人做�
 `moonroll` 补的就是这一层：不绑定任何引擎的确定性回滚同步（rollback netcode）。
 
 **状态：V1.0（功能完备，模块版本 `0.9.7`）**。定点数、状态哈希、输入环、预测 / 确认 / 回滚重放、
-紧凑字节协议（区间帧 + 变化掩码 + 全量状态帧）、确定性延迟 / 抖动 / 丢包 / 乱序模拟器，
+紧凑字节协议（区间帧 + 变化掩码 + 全量状态帧）、确定性延迟 / 抖动 / 丢包 / 乱序 / 带宽模拟器，
 一个把两个 `moonphys` 物理世界连起来的可视化演示，以及七个 `moon run` 就能跑的示例
 （含四人对局重放成本对比、掉线走势对比、五种发包策略的带宽对比、分叉后的全量重同步）。
 
@@ -147,10 +147,18 @@ for packet in net.recv(frame) { /* ... */ } // 到达的包，按到达时间排
 net.delivered()  // 已交付包数
 net.dropped()    // 丢弃包数
 net.in_flight()  // 在途包数
+
+// 上行带宽：每帧最多通过 40 字节，同一帧内的多个包共用这份预算
+let capped = @sim_net.NetSim::new(
+  @sim_net.Link::with_bandwidth(delay, jitter, loss_pct, reorder_pct, seed, 40),
+)
+capped.send(frame, payload)  // 超预算整包丢弃
+capped.throttled()           // 因超预算被丢弃的包数
 ```
 
 时间单位是逻辑帧（60fps 下 1 帧 ≈ 16.7ms），内部是确定性 LCG：
 **同 seed、同发送序列必然得到同到达序列**，所以整条链路可以进单元测试和 fuzz。
+带宽检查在丢包/抖动之前完成，且不消耗随机流，因此加预算不会打乱既有的丢包序列。
 
 ## 七个 `moon run` 就能跑的示例
 
@@ -217,7 +225,7 @@ python -m http.server --directory docs 8123   # 打开 http://localhost:8123/
 
 | 包 | 内容 | 状态 |
 | --- | --- | --- |
-| `weopqrst/moonroll/fixed` | Q16.16 定点数（`+ - * /`、开方、lerp、clamp） | V0.1 |
+| `weopqrst/moonroll/fixed` | Q16.16 定点数（`+ - * /`、开方、`sin/cos` 查表、lerp、clamp） | V0.1 |
 | `weopqrst/moonroll/digest` | FNV-1a 64 状态哈希 | V0.1 |
 | `weopqrst/moonroll/input` | 帧号 -> 输入位图的环形缓冲 | V0.1 |
 | `weopqrst/moonroll/session` | `Sim` 协议 + 预测 / 确认 / 回滚重放 / 历史哈希 + 1..8 人会话 + 分叉重同步 | V0.2 |
@@ -240,7 +248,7 @@ python -m http.server --directory docs 8123   # 打开 http://localhost:8123/
 node tools/verify.mjs    # check + fmt + 双后端测试 + native + 七个示例 + demo 自检
 ```
 
-166 个测试，两个后端全绿；`moon check --deny-warn` 与 `moon fmt --check` 在 CI 里全绿。核心断言：
+173 个测试，两个后端全绿；`moon check --deny-warn` 与 `moon fmt --check` 在 CI 里全绿。核心断言：
 
 - 定点数与 `Double` 对拍误差不超过 4 个 LSB；
 - FNV-1a 64 对 `"hello"` 命中标准向量 `0xa430d84680aabd0b`；

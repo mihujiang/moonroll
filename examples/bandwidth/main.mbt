@@ -73,6 +73,8 @@ pub(all) struct PackStats {
   mismatches : Int32
   /// 首个分叉帧；-1 表示全程一致。
   first_divergence : Int32
+  /// 因超出链路每帧字节预算而被丢弃的包数（所有单向链路累加）。
+  throttled : Int64
 }
 
 ///|
@@ -253,6 +255,7 @@ pub fn run(
   packing : Packing,
   spec : @scene.LinkSpec,
   total : Int32,
+  bandwidth~ : Int32 = 0,
 ) -> PackStats {
   let sessions : Array[@session.Session[@scene.Scene]] = []
   let mut i = 0
@@ -270,12 +273,13 @@ pub fn run(
     while to < PLAYERS {
       row.push(
         @sim_net.NetSim::new(
-          @sim_net.Link::new(
+          @sim_net.Link::with_bandwidth(
             spec.delay,
             spec.jitter,
             spec.loss,
             spec.reorder,
             ((from * 131 + to).to_uint64() + 1UL) * 2654435761UL,
+            bandwidth,
           ),
         ),
       )
@@ -391,6 +395,16 @@ pub fn run(
     replayed = replayed + sessions[k].replayed()
     k = k + 1
   }
+  let mut throttled = 0L
+  let mut a = 0
+  while a < PLAYERS {
+    let mut b = 0
+    while b < PLAYERS {
+      throttled = throttled + nets[a][b].throttled().to_int64()
+      b = b + 1
+    }
+    a = a + 1
+  }
   {
     bytes,
     packets,
@@ -400,6 +414,7 @@ pub fn run(
     replayed,
     mismatches,
     first_divergence: scan_divergence(sessions),
+    throttled,
   }
 }
 
@@ -465,6 +480,66 @@ fn main {
   } else {
     println(
       "警告：出现了分叉或未收敛的会话，说明打包/投递有 bug。",
+    )
+  }
+  println("")
+  // 链路带宽：每帧每链路只有 40 字节。固定重发的包本身就超预算，被整包丢弃；
+  // 自适应策略从对端水位之后开始发，包随链路变瘦，能挤进预算。
+  let cap = 40
+  let capped : Array[PackStats] = [
+    run(Legacy, spec, TOTAL, bandwidth=cap),
+    run(Span, spec, TOTAL, bandwidth=cap),
+    run(Masked, spec, TOTAL, bandwidth=cap),
+    run(Adaptive, spec, TOTAL, bandwidth=cap),
+    run(Lean, spec, TOTAL, bandwidth=cap),
+  ]
+  println("同样链路，外加每帧每链路 \{cap} 字节上行预算：")
+  println("")
+  println(
+    "| 策略 | 尝试发送字节 | 被限流丢弃 | 确认帧 | 一致 |",
+  )
+  println("| --- | --- | --- | --- | --- |")
+  let mut j = 0
+  while j < modes.length() {
+    let st = capped[j]
+    println(
+      "| " +
+      modes[j].label() +
+      " | " +
+      st.bytes.to_string() +
+      " | " +
+      st.throttled.to_string() +
+      " | " +
+      st.confirmed[0].to_string() +
+      "/" +
+      st.confirmed[1].to_string() +
+      "/" +
+      st.confirmed[2].to_string() +
+      "/" +
+      st.confirmed[3].to_string() +
+      " | " +
+      (if st.first_divergence == -1 { "yes" } else { "NO" }) +
+      " |",
+    )
+    j = j + 1
+  }
+  println("")
+  let mut packed_ok = true
+  let mut m = 1
+  while m < modes.length() {
+    if capped[m].confirmed[0] != TOTAL || capped[m].first_divergence != -1 {
+      packed_ok = false
+    }
+    m = m + 1
+  }
+  if packed_ok && capped[0].throttled > 0L && capped[0].confirmed[0] < TOTAL {
+    println(
+      "结论：第一种每帧 16 条 `Input`，包本身就超预算，被整包丢弃 \{capped[0].throttled} 次，确认帧停在 \{capped[0].confirmed[0]}；" +
+      "换成区间帧后包只有二三十字节，限流一次没触发，确认帧照常追平 \{TOTAL}——预算卡住的是冗余，不是正确性。",
+    )
+  } else {
+    println(
+      "警告：限流结果不符合预期，检查 Link 带宽预算或打包策略。",
     )
   }
   println("")

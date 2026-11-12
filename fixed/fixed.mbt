@@ -164,6 +164,59 @@ pub fn lerp(a : Fixed, b : Fixed, t : Fixed) -> Fixed {
 }
 
 ///|
+/// π/2 的 Q16.16 表示。
+const FIXED_HALF_PI : Int64 = 102944L
+
+///|
+/// 2π 的 Q16.16 表示。
+const FIXED_TWO_PI : Int64 = 411775L
+
+///|
+/// 查表步数：四分之一周期被切成 256 段。
+const FIXED_STEPS : Int64 = 256L
+
+///|
+/// 正弦，输入是弧度（Q16.16）。
+///
+/// 查表 + 整数线性插值，全程不调用浮点三角函数。这不是性能取舍，而是确定性
+/// 要求：`js` 的 `Math.sin` 与 `wasm-gc`/`native` 的 libm 在不同输入上可能
+/// 差最后一位，回滚同步要的是逐位一致。
+///
+/// 误差上界：Q16.16 的量化分辨率约 `1.5e-5`，插值附加误差约 `2e-6`。
+pub fn Fixed::sin(self : Fixed) -> Fixed {
+  // 归约到 [0, 2π)
+  let mut r = self.v % FIXED_TWO_PI
+  if r < 0L {
+    r = r + FIXED_TWO_PI
+  }
+  // 落到哪个象限，并把区间角折回 [0, π/2]
+  let q = r / FIXED_HALF_PI
+  let mut t = r - q * FIXED_HALF_PI
+  if q % 2L == 1L {
+    t = FIXED_HALF_PI - t
+  }
+  let scaled = t * FIXED_STEPS
+  let idx = scaled / FIXED_HALF_PI
+  let frac = scaled % FIXED_HALF_PI
+  let i = idx.to_int()
+  // t 恰为 π/2 时 idx 落在表尾，没有下一项可插值，直接取端点。
+  let mag = if i >= 256 {
+    sin_table[256]
+  } else {
+    let a = sin_table[i]
+    let b = sin_table[i + 1]
+    a + (b - a) * frac / FIXED_HALF_PI
+  }
+  { v: if q < 2L { mag } else { -mag }, }
+}
+
+///|
+/// 余弦，输入是弧度（Q16.16）。`cos(x) = sin(x + π/2)`，复用同一张表。
+pub fn Fixed::cos(self : Fixed) -> Fixed {
+  (self + { v: FIXED_HALF_PI, }).sin()
+}
+
+///|
 pub fn clamp(value : Fixed, lo : Fixed, hi : Fixed) -> Fixed {
   if value < lo {
     lo
