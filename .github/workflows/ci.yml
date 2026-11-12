@@ -52,7 +52,11 @@ jobs:
       - name: check
         working-directory: moonroll
         run: |
-          if ! out=$(moon check --deny-warn 2>&1); then
+          # 27 = deprecated_syntax（`} derive(...)` 要改成类型声明前的 `#derive(...)`），
+          # 20 = deprecated（例如 `String::view(start_offset=)` → `clamped_view`）。
+          # 最新工具链（0.1.20261104）开始把这两类算警告，而本地工具链还不支持
+          # `#derive`，迁移必须成对升级，所以先按编号豁免；其余警告仍然 fail-fast。
+          if ! out=$(moon check --deny-warn --warn-list "-27-20" 2>&1); then
             printf '%s\n' "$out"
             msg=$(printf '%s' "$out" | tr -d '%' | tr '\n' '|' | head -c 3000)
             echo "::error::moon check failed: $msg"
