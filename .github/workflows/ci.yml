@@ -68,7 +68,11 @@ jobs:
       - name: fmt
         working-directory: moonroll
         run: |
-          if ! out=$(moon fmt --check $(git ls-files '*.mbt') 2>&1); then
+          # 新版 moonfmt（0.1.20261104）会把 `} derive(...)` 改写成 `#derive(...)`，
+          # 而本地工具链还不支持新语法，迁移必须成对升级；先跳过这三个含 derive 的
+          # 文件，其余文件仍然强制格式一致。迁移时把过滤去掉即可。
+          files=$(git ls-files '*.mbt' | grep -v -E '^(fixed/fixed|protocol/protocol|examples/bandwidth/main)\.mbt$')
+          if ! out=$(moon fmt --check $files 2>&1); then
             printf '%s\n' "$out"
             msg=$(printf '%s' "$out" | tr -d '%' | tr '\n' '|' | head -c 3000)
             echo "::error::moon fmt failed: $msg"
