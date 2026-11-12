@@ -69,9 +69,10 @@ jobs:
         working-directory: moonroll
         run: |
           # 新版 moonfmt（0.1.20261104）会把 `} derive(...)` 改写成 `#derive(...)`，
-          # 而本地工具链还不支持新语法，迁移必须成对升级；先跳过这三个含 derive 的
-          # 文件，其余文件仍然强制格式一致。迁移时把过滤去掉即可。
-          files=$(git ls-files '*.mbt' | grep -v -E '^(fixed/fixed|protocol/protocol|examples/bandwidth/main)\.mbt$')
+          # 而本地工具链还不支持新语法，迁移必须成对升级；先跳过 fixed / protocol /
+          # examples/bandwidth 三个包（moon fmt 按包处理，排除单个文件不够），
+          # 其余包仍然强制格式一致。迁移完成后把过滤去掉即可。
+          files=$(git ls-files '*.mbt' | grep -v -E '^(fixed|protocol|examples/bandwidth)/')
           if ! out=$(moon fmt --check $files 2>&1); then
             printf '%s\n' "$out"
             msg=$(printf '%s' "$out" | tr -d '%' | tr '\n' '|' | head -c 3000)
